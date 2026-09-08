@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>X/Sites — Google Satellite over AWS DEM</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"></script>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="panel">
+    <div class="panel-header">
+      <div class="brand">
+        <img src="logo.svg" alt="" class="brand-logo" />
+        <h1>X/Sites</h1>
+      </div>
+
+      <button type="button" id="terrainToggle" class="terrain-toggle" aria-expanded="true">
+        <span>Map Controls</span>
+        <span class="chevron">&#9650;</span>
+      </button>
+      <div id="terrainContent" class="terrain-content">
+        <div class="zoom-controls">
+          <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+          <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+        </div>
+
+        <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
+        <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
+
+        <label for="exaggeration">Terrain exaggeration: <span id="exaggerationValue">1.5</span>&times;</label>
+        <input type="range" id="exaggeration" min="0.5" max="4" step="0.1" value="1.5" />
+      </div>
+    </div>
+
+    <div id="sitesListView">
+      <div class="sites-header">
+        <h2>Sites</h2>
+      </div>
+      <div class="list-filters">
+        <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
+        <select id="areaFilter">
+          <option value="">All areas</option>
+        </select>
+      </div>
+      <div id="siteList"></div>
+    </div>
+
+    <div id="siteDetailView" hidden>
+      <div class="sites-header">
+        <button id="backToListBtn" class="link-btn">&larr; Back</button>
+      </div>
+      <div id="siteDetailContent"></div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

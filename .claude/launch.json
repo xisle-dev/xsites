@@ -6,6 +6,12 @@
       "runtimeExecutable": "server\\xsite-server.exe",
       "runtimeArgs": ["-port=8933", "-root=."],
       "port": 8933
+    },
+    {
+      "name": "xsite-static",
+      "runtimeExecutable": "tools\\localserve\\localserve.exe",
+      "runtimeArgs": ["-dir=dist", "-port=8934"],
+      "port": 8934
     }
   ]
 }

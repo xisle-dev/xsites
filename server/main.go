@@ -22,6 +22,7 @@ var sitesDir string
 
 func main() {
 	port := flag.String("port", "8933", "HTTP port")
+	host := flag.String("host", "127.0.0.1", "Bind address (use 0.0.0.0 to accept connections from outside localhost, e.g. from other containers)")
 	root := flag.String("root", ".", "Project root to serve static files from")
 	flag.Parse()
 
@@ -72,7 +73,7 @@ func main() {
 
 	mux.Handle("/", http.FileServer(http.Dir(absRoot)))
 
-	addr := "127.0.0.1:" + *port
+	addr := *host + ":" + *port
 	log.Printf("Serving %s on http://%s/", absRoot, addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
