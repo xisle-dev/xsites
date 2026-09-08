@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "xsite",
+      "runtimeExecutable": "server\\xsite-server.exe",
+      "runtimeArgs": ["-port=8933", "-root=."],
+      "port": 8933
+    }
+  ]
+}

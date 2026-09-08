@@ -1,0 +1,558 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #14161a;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+}
+
+.zoom-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 10px 0 4px;
+}
+
+.zoom-controls button {
+  width: 44px;
+  background: #2a2e35;
+  border: 1px solid #40454e;
+  border-bottom: none;
+  color: #f2f2f2;
+  font-size: 18px;
+  line-height: 1;
+  font-family: inherit;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.zoom-controls button:first-child {
+  border-radius: 6px 6px 0 0;
+}
+
+.zoom-controls button:last-child {
+  border-radius: 0 0 6px 6px;
+  border-bottom: 1px solid #40454e;
+}
+
+.zoom-controls button:hover {
+  background: #383e47;
+}
+
+.zoom-controls button:active {
+  background: #22262d;
+}
+
+.terrain-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  border-top: 1px solid #2a2e35;
+  color: #f2f2f2;
+  padding: 10px 0;
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.terrain-toggle:hover {
+  background: #22262d;
+}
+
+.terrain-toggle .chevron {
+  font-size: 10px;
+  color: #9aa1ab;
+  transition: transform 0.15s ease;
+}
+
+.terrain-toggle[aria-expanded="false"] .chevron {
+  transform: rotate(180deg);
+}
+
+.terrain-content {
+  padding: 0 0 10px;
+}
+
+.terrain-content[hidden] {
+  display: none;
+}
+
+.terrain-content label {
+  display: block;
+  margin: 10px 0 4px;
+  font-size: 12.5px;
+  color: #cfd3d9;
+}
+
+.terrain-content input[type="range"] {
+  width: 100%;
+}
+
+#panel {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  bottom: 16px;
+  z-index: 10;
+  width: 320px;
+  background: rgba(20, 22, 26, 0.92);
+  color: #f2f2f2;
+  border-radius: 10px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  flex: 0 0 auto;
+  padding: 16px 18px 4px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+#panel h1 {
+  margin: 0 0 2px;
+  font-size: 18px;
+}
+
+#panel .sub {
+  margin: 0 0 14px;
+  color: #9aa1ab;
+  font-size: 12px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.buttons button {
+  flex: 1 1 auto;
+  background: #2a2e35;
+  color: #f2f2f2;
+  border: 1px solid #40454e;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.buttons button:hover {
+  background: #383e47;
+}
+
+/* --- Sites list, merged into the same left panel as the map controls --- */
+
+#sitesListView,
+#siteDetailView,
+#siteForm {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#sitesListView[hidden],
+#siteDetailView[hidden],
+#siteForm[hidden] {
+  display: none;
+}
+
+.sites-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 8px;
+  flex: 0 0 auto;
+}
+
+.sites-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #7fb3ff;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+#addSiteBtn {
+  background: #ff5a3c;
+  color: #14161a;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#addSiteBtn:hover {
+  background: #ff7355;
+}
+
+.list-filters {
+  display: flex;
+  gap: 6px;
+  margin: 0 16px 8px;
+}
+
+#siteSearch {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid #40454e;
+  background: #1c1f25;
+  color: #f2f2f2;
+  font-size: 12.5px;
+}
+
+#areaFilter {
+  flex: 0 0 auto;
+  max-width: 40%;
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid #40454e;
+  background: #1c1f25;
+  color: #f2f2f2;
+  font-size: 12.5px;
+}
+
+#siteList {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: #4a505a #1c1f25;
+}
+
+#siteList::-webkit-scrollbar {
+  width: 8px;
+}
+
+#siteList::-webkit-scrollbar-track {
+  background: #1c1f25;
+}
+
+#siteList::-webkit-scrollbar-thumb {
+  background: #4a505a;
+  border-radius: 4px;
+}
+
+#siteList::-webkit-scrollbar-thumb:hover {
+  background: #5c636f;
+}
+
+.site-item {
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.site-item:hover {
+  background: #262a31;
+}
+
+.site-item .site-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.site-item .site-area {
+  font-size: 11.5px;
+  color: #9aa1ab;
+}
+
+#siteDetailContent,
+#siteForm {
+  overflow-y: auto;
+  padding: 0 16px 16px;
+}
+
+#siteDetailContent h3 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+#siteDetailContent .site-area {
+  color: #9aa1ab;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+#siteDetailContent .section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7f8791;
+  margin: 12px 0 4px;
+}
+
+#siteDetailContent .rich {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+#siteDetailContent .rich p {
+  margin: 0 0 6px;
+}
+
+#siteDetailContent .stat-row {
+  display: flex;
+  gap: 16px;
+  font-size: 12.5px;
+  color: #cfd3d9;
+}
+
+.media-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.media-thumb {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1c1f25;
+}
+
+.media-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media-thumb .media-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(20, 22, 26, 0.85);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#siteForm label {
+  display: block;
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: #cfd3d9;
+}
+
+#siteForm input[type="text"],
+#siteForm input[type="number"] {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid #40454e;
+  background: #1c1f25;
+  color: #f2f2f2;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+/* Quill defaults to a light theme -- retint it to match the rest of the
+   dark form instead of leaving a bright white box in the middle of it. */
+.rte {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #40454e;
+}
+
+.rte .ql-toolbar.ql-snow {
+  border: none;
+  border-bottom: 1px solid #40454e;
+  background: #22262d;
+}
+
+.rte .ql-toolbar.ql-snow.rte-toolbar-hidden {
+  display: none;
+}
+
+.rte .ql-toolbar.ql-snow .ql-stroke {
+  stroke: #cfd3d9;
+}
+
+.rte .ql-toolbar.ql-snow .ql-fill {
+  fill: #cfd3d9;
+}
+
+.rte .ql-toolbar.ql-snow .ql-picker-label {
+  color: #cfd3d9;
+}
+
+.rte .ql-toolbar.ql-snow button:hover .ql-stroke,
+.rte .ql-toolbar.ql-snow button.ql-active .ql-stroke {
+  stroke: #ff5a3c;
+}
+
+.rte .ql-toolbar.ql-snow button:hover .ql-fill,
+.rte .ql-toolbar.ql-snow button.ql-active .ql-fill {
+  fill: #ff5a3c;
+}
+
+.rte .ql-container.ql-snow {
+  border: none;
+  background: #1c1f25;
+  color: #f2f2f2;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.rte .ql-editor {
+  min-height: 70px;
+}
+
+.rte .ql-editor.ql-blank::before {
+  color: #6b7178;
+  font-style: normal;
+}
+
+.rte .ql-snow .ql-picker-options {
+  background: #22262d;
+  border: 1px solid #40454e;
+}
+
+.rte .ql-snow .ql-picker-item {
+  color: #cfd3d9;
+}
+
+#siteForm .field-row {
+  display: flex;
+  gap: 10px;
+}
+
+#siteForm .field-row > div {
+  flex: 1;
+}
+
+#siteForm .hint {
+  font-size: 11px;
+  color: #9aa1ab;
+  margin: 8px 0 4px;
+}
+
+#siteForm #useCurrentViewBtn,
+#siteForm #pickPinBtn {
+  width: 100%;
+  background: #2a2e35;
+  color: #f2f2f2;
+  border: 1px solid #40454e;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+#siteForm #pickPinBtn.active {
+  background: #ff5a3c;
+  color: #14161a;
+  border-color: #ff5a3c;
+  font-weight: 600;
+}
+
+#saveSiteBtn {
+  background: #ff5a3c;
+  color: #14161a;
+  font-weight: 600;
+}
+
+#deleteSiteBtn {
+  background: #3a2226 !important;
+  color: #ff8a7a !important;
+  border-color: #5a2f34 !important;
+}
+
+#placingBanner {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: #ff5a3c;
+  color: #14161a;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+#placingBanner button {
+  background: none;
+  border: none;
+  color: #14161a;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.site-marker {
+  width: 26px;
+  height: 26px;
+  border-radius: 50% 50% 50% 0;
+  background: #ff5a3c;
+  border: 2px solid #14161a;
+  transform: rotate(-45deg);
+  cursor: pointer;
+}
+
+.site-marker::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  background: #14161a;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+}

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>X/Sites — Google Satellite over AWS DEM</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.snow.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="panel">
+    <div class="panel-header">
+      <div class="brand">
+        <img src="logo.svg" alt="" class="brand-logo" />
+        <h1>X/Sites</h1>
+      </div>
+
+      <button type="button" id="terrainToggle" class="terrain-toggle" aria-expanded="true">
+        <span>Map Controls</span>
+        <span class="chevron">&#9650;</span>
+      </button>
+      <div id="terrainContent" class="terrain-content">
+        <div class="zoom-controls">
+          <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+          <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+        </div>
+
+        <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
+        <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
+
+        <label for="exaggeration">Terrain exaggeration: <span id="exaggerationValue">1.5</span>&times;</label>
+        <input type="range" id="exaggeration" min="0.5" max="4" step="0.1" value="1.5" />
+      </div>
+    </div>
+
+    <div id="sitesListView">
+      <div class="sites-header">
+        <h2>Sites</h2>
+        <button id="addSiteBtn" title="Add a new site">+ Add</button>
+      </div>
+      <div class="list-filters">
+        <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
+        <select id="areaFilter">
+          <option value="">All areas</option>
+        </select>
+      </div>
+      <div id="siteList"></div>
+    </div>
+
+    <div id="siteDetailView" hidden>
+      <div class="sites-header">
+        <button id="backToListBtn" class="link-btn">&larr; Back</button>
+      </div>
+      <div id="siteDetailContent"></div>
+    </div>
+
+    <form id="siteForm" hidden>
+      <div class="sites-header">
+        <h2 id="siteFormTitle">Add site</h2>
+        <button type="button" id="cancelFormBtn" class="link-btn">Cancel</button>
+      </div>
+
+      <label for="fName">Name</label>
+      <input type="text" id="fName" required />
+
+      <label for="fArea">Area</label>
+      <input type="text" id="fArea" />
+
+      <label>Description</label>
+      <div class="rte"><div id="fDescription"></div></div>
+
+      <label>Hazards</label>
+      <div class="rte"><div id="fHazards"></div></div>
+
+      <div class="field-row">
+        <div>
+          <label for="fLatitude">Latitude</label>
+          <input type="number" step="any" id="fLatitude" required />
+        </div>
+        <div>
+          <label for="fLongitude">Longitude</label>
+          <input type="number" step="any" id="fLongitude" required />
+        </div>
+      </div>
+      <button type="button" id="pickPinBtn">Click map to set pin</button>
+
+      <label for="fElevation">Elevation (m)</label>
+      <input type="number" step="1" id="fElevation" />
+
+      <p class="hint">Camera preset (used for "Fly here"):</p>
+      <button type="button" id="useCurrentViewBtn">Use current map view</button>
+      <div id="fViewSummary" class="hint"></div>
+
+      <div class="buttons">
+        <button type="submit" id="saveSiteBtn">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="placingBanner" hidden></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

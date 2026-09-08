@@ -1,0 +1,7 @@
+# Build artifacts -- rebuild with: cd server && go build -o xsite-server.exe .
+server/*.exe
+
+# Regenerable Protomaps basemap extract (~200MB, over GitHub's file size
+# limit anyway). Regenerate with go-pmtiles extract -- see README.md.
+tiles/*.pmtiles
+tiles/*.log
