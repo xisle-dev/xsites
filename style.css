@@ -118,6 +118,48 @@ html, body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+
+.panel-handle {
+  display: none;
+}
+
+/* --- Bottom sheet: below this width #panel docks to the bottom edge and
+   collapses/expands (via #panelHandle) instead of sitting fixed beside a
+   map that's too narrow to share space with a 320px sidebar. --- */
+@media (max-width: 700px) {
+  #panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 75vh;
+    border-radius: 16px 16px 0 0;
+  }
+
+  #panel.sheet-collapsed {
+    max-height: 64px;
+  }
+
+  .panel-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 10px 0 4px;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .panel-handle::before {
+    content: "";
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #4a505a;
+  }
 }
 
 .panel-header {
@@ -173,6 +215,7 @@ html, body {
 
 #sitesListView,
 #siteDetailView,
+#airspaceListView,
 #siteForm {
   display: flex;
   flex-direction: column;
@@ -182,8 +225,22 @@ html, body {
 
 #sitesListView[hidden],
 #siteDetailView[hidden],
+#airspaceListView[hidden],
 #siteForm[hidden] {
   display: none;
+}
+
+#airspaceEntries {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: #4a505a #1c1f25;
+}
+
+.airspace-entry-class {
+  color: #9aa1ab;
+  font-weight: 400;
 }
 
 .sites-header {
@@ -590,37 +647,6 @@ html, body {
 
 .airspace-attribution a {
   color: #7fb3ff;
-}
-
-.airspace-popup {
-  font-size: 12.5px;
-  color: #14161a;
-}
-
-.airspace-popup .airspace-popup-name {
-  font-weight: 600;
-  margin-bottom: 3px;
-}
-
-.airspace-popup .airspace-popup-limits {
-  color: #4a505a;
-}
-
-.airspace-popup .airspace-popup-entry {
-  padding: 2px 4px;
-  margin: 0 -4px;
-  border-radius: 4px;
-  cursor: default;
-}
-
-.airspace-popup .airspace-popup-entry:hover {
-  background: #f0f2f5;
-}
-
-.airspace-popup .airspace-popup-sep {
-  border: none;
-  border-top: 1px solid #e2e4e8;
-  margin: 6px 0;
 }
 
 .site-marker {

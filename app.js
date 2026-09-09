@@ -6,7 +6,6 @@
 import {
   Map,
   Marker,
-  Popup,
   ScaleControl,
   addProtocol,
 } from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
@@ -351,6 +350,81 @@ map.on("pitch", () => {
   pitchValue.textContent = Math.round(p);
 });
 
+// --- Bottom sheet (mobile) ---
+//
+// Below the CSS breakpoint, #panel becomes a bottom sheet instead of a
+// fixed left-side panel (see style.css). #panelHandle toggles between
+// collapsed (just the brand row peeking above the map) and expanded, and
+// also supports dragging to an arbitrary height that snaps to whichever
+// state it's closer to on release -- both live on the same pointer
+// listeners so a plain tap (no movement) is treated as a toggle.
+
+const panel = document.getElementById("panel");
+const panelHandle = document.getElementById("panelHandle");
+const SHEET_COLLAPSED_HEIGHT = 64;
+
+function isMobileSheet() {
+  return window.matchMedia("(max-width: 700px)").matches;
+}
+
+// Map Controls (pitch/exaggeration/airspace legend) defaults to expanded,
+// which is fine beside a full-height desktop panel but eats most of a
+// mobile sheet's limited height -- start collapsed there so the site list
+// is what's actually visible first.
+if (isMobileSheet()) {
+  terrainToggle.setAttribute("aria-expanded", "false");
+  terrainContent.hidden = true;
+}
+
+// Used whenever new content appears (a site or airspace selection) so it's
+// actually visible instead of clipped behind a collapsed sheet.
+function expandPanel() {
+  panel.classList.remove("sheet-collapsed");
+}
+
+if (panelHandle) {
+  let dragStartY = null;
+  let dragStartHeight = null;
+  let dragMoved = false;
+
+  panelHandle.addEventListener("pointerdown", (e) => {
+    if (!isMobileSheet()) return;
+    dragStartY = e.clientY;
+    dragStartHeight = panel.getBoundingClientRect().height;
+    dragMoved = false;
+    panel.style.transition = "none";
+  });
+
+  // Tracked on document, not the handle -- a real drag routinely carries
+  // the pointer off such a small target, and capturing the pointer to the
+  // handle element also confuses at least one automated click driver.
+  document.addEventListener("pointermove", (e) => {
+    if (dragStartY === null) return;
+    const delta = dragStartY - e.clientY;
+    if (Math.abs(delta) > 4) dragMoved = true;
+    const expandedMax = window.innerHeight * 0.75;
+    const next = Math.min(expandedMax, Math.max(SHEET_COLLAPSED_HEIGHT, dragStartHeight + delta));
+    panel.style.maxHeight = `${next}px`;
+  });
+
+  function endDrag() {
+    if (dragStartY === null) return;
+    dragStartY = null;
+    panel.style.transition = "";
+    if (dragMoved) {
+      const expandedMax = window.innerHeight * 0.75;
+      const midpoint = (SHEET_COLLAPSED_HEIGHT + expandedMax) / 2;
+      const currentHeight = panel.getBoundingClientRect().height;
+      panel.classList.toggle("sheet-collapsed", currentHeight < midpoint);
+    } else {
+      panel.classList.toggle("sheet-collapsed");
+    }
+    panel.style.maxHeight = "";
+  }
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", endDrag);
+}
+
 // --- Airspace overlay ---
 
 const airspaceToggle = document.getElementById("airspaceToggle");
@@ -391,33 +465,46 @@ function setAirspaceHighlight(geometry) {
   );
 }
 
-function buildAirspacePopupContent(entries) {
-  const container = document.createElement("div");
-  container.className = "airspace-popup";
-  entries.forEach((entry, i) => {
-    if (i > 0) container.appendChild(Object.assign(document.createElement("hr"), { className: "airspace-popup-sep" }));
+// Airspace selections share the same panel/sheet as the sites list and
+// detail view (see #airspaceListView in index.html), rather than a
+// separate floating map popup -- one UI surface instead of two, and it's
+// the only sensible option once that surface is a bottom sheet on mobile
+// (a map popup would be pinned to a point that's often hidden behind it).
+const airspaceListView = document.getElementById("airspaceListView");
+const airspaceEntries = document.getElementById("airspaceEntries");
+document.getElementById("airspaceBackBtn").addEventListener("click", showListView);
+
+function showAirspaceList(entries) {
+  stopPlacing();
+  sitesListView.hidden = true;
+  siteDetailView.hidden = true;
+  siteForm.hidden = true;
+  airspaceListView.hidden = false;
+  expandPanel();
+
+  airspaceEntries.innerHTML = "";
+  entries.forEach((entry) => {
     const row = document.createElement("div");
-    row.className = "airspace-popup-entry";
+    row.className = "site-item";
     const nameEl = document.createElement("div");
-    nameEl.className = "airspace-popup-name";
+    nameEl.className = "site-name";
     nameEl.textContent = entry.properties.name;
     const classSpan = document.createElement("span");
-    classSpan.style.color = "#888";
-    classSpan.textContent = ` (Class ${entry.properties.class})`;
+    classSpan.className = "airspace-entry-class";
+    classSpan.textContent = ` (${entry.properties.class})`;
     nameEl.appendChild(classSpan);
     const limitsEl = document.createElement("div");
-    limitsEl.className = "airspace-popup-limits";
+    limitsEl.className = "site-area";
     limitsEl.textContent = `${entry.properties.floor} – ${entry.properties.ceiling}`;
     row.append(nameEl, limitsEl);
     row.addEventListener("mouseenter", () => setAirspaceHighlight(entry.geometry));
     row.addEventListener("mouseleave", () => setAirspaceHighlight(null));
-    container.appendChild(row);
+    airspaceEntries.appendChild(row);
   });
-  return container;
 }
 
 map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
-  // Don't pop up airspace info while the user is trying to place/reposition
+  // Don't show airspace info while the user is trying to place/reposition
   // a site pin -- let the general click handler below handle it instead.
   if (placingMode) return;
   if (!e.features || e.features.length === 0) return;
@@ -434,11 +521,7 @@ map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
     seen.add(key);
     entries.push({ properties: p, geometry: f.geometry });
   }
-  const popup = new Popup({ closeButton: true, maxWidth: "280px" })
-    .setLngLat(e.lngLat)
-    .setDOMContent(buildAirspacePopupContent(entries));
-  popup.on("close", () => setAirspaceHighlight(null));
-  popup.addTo(map);
+  showAirspaceList(entries);
 });
 map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
 map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
@@ -615,6 +698,7 @@ function showListView() {
   sitesListView.hidden = false;
   siteDetailView.hidden = true;
   siteForm.hidden = true;
+  airspaceListView.hidden = true;
 }
 
 function showDetail(id) {
@@ -623,7 +707,9 @@ function showDetail(id) {
   if (!site) return;
   sitesListView.hidden = true;
   siteForm.hidden = true;
+  airspaceListView.hidden = true;
   siteDetailView.hidden = false;
+  expandPanel();
 
   const photos = (site.references || []).filter((r) => r.type === "photo");
   siteDetailContent.innerHTML = `
@@ -718,7 +804,9 @@ function showForm(site) {
   editingId = site ? site.id : null;
   sitesListView.hidden = true;
   siteDetailView.hidden = true;
+  airspaceListView.hidden = true;
   siteForm.hidden = false;
+  expandPanel();
   document.getElementById("siteFormTitle").textContent = site ? "Edit site" : "Add site";
 
   document.getElementById("fName").value = site?.name || "";

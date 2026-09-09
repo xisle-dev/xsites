@@ -13,6 +13,7 @@
   <div id="map"></div>
 
   <div id="panel">
+    <div id="panelHandle" class="panel-handle" aria-hidden="true"></div>
     <div class="panel-header">
       <div class="brand">
         <img src="logo.svg" alt="" class="brand-logo" />
@@ -74,6 +75,14 @@
         <button id="backToListBtn" class="link-btn">&larr; Back</button>
       </div>
       <div id="siteDetailContent"></div>
+    </div>
+
+    <div id="airspaceListView" hidden>
+      <div class="sites-header">
+        <button id="airspaceBackBtn" class="link-btn">&larr; Back</button>
+        <h2>Airspace</h2>
+      </div>
+      <div id="airspaceEntries"></div>
     </div>
 
     <form id="siteForm" hidden>
