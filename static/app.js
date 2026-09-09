@@ -7,6 +7,7 @@
 import {
   Map,
   Marker,
+  Popup,
   ScaleControl,
   addProtocol,
 } from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
@@ -91,6 +92,25 @@ const TERRAIN_SOURCE_ID = "dem-terrain";
 const SAT_SOURCE_ID = "satellite";
 const SAT_LAYER_ID = "satellite-layer";
 const LABELS_SOURCE_ID = "labels";
+const AIRSPACE_SOURCE_ID = "airspace";
+const AIRSPACE_FILL_LAYER_ID = "airspace-fill";
+const AIRSPACE_LINE_LAYER_ID = "airspace-line";
+
+// Canadian airspace (NAV CANADA data via OpenAIP, CC BY-NC 4.0), pre-filtered
+// to the Vancouver Island flying area by tools/fetchairspace -- see that
+// tool's header comment for how the icaoClass -> letter mapping was derived
+// (OpenAIP's own docs don't spell it out).
+const AIRSPACE_COLORS = { B: "#3b82f6", C: "#ec4899", D: "#22d3ee", E: "#a78bfa", F: "#f97316", SUA: "#ef4444" };
+const airspaceColorExpr = [
+  "match", ["get", "class"],
+  "B", AIRSPACE_COLORS.B,
+  "C", AIRSPACE_COLORS.C,
+  "D", AIRSPACE_COLORS.D,
+  "E", AIRSPACE_COLORS.E,
+  "F", AIRSPACE_COLORS.F,
+  "SUA", AIRSPACE_COLORS.SUA,
+  "#999999",
+];
 
 // Place/road/city labels as real vector text, same tuning as the full app
 // (see app.js for the detailed writeup of why: upright at any bearing,
@@ -186,6 +206,11 @@ const style = {
       url: `pmtiles://${PMTILES_URL}`,
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     },
+    [AIRSPACE_SOURCE_ID]: {
+      type: "geojson",
+      data: new URL("data/airspace.geojson", window.location.href).href,
+      attribution: '© <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors (CC BY-NC 4.0)',
+    },
   },
   layers: [
     {
@@ -210,6 +235,18 @@ const style = {
       type: "raster",
       source: SAT_SOURCE_ID,
       paint: { "raster-opacity": 0.92 },
+    },
+    {
+      id: AIRSPACE_FILL_LAYER_ID,
+      type: "fill",
+      source: AIRSPACE_SOURCE_ID,
+      paint: { "fill-color": airspaceColorExpr, "fill-opacity": 0.18 },
+    },
+    {
+      id: AIRSPACE_LINE_LAYER_ID,
+      type: "line",
+      source: AIRSPACE_SOURCE_ID,
+      paint: { "line-color": airspaceColorExpr, "line-width": 1.5, "line-opacity": 0.85 },
     },
     ...tunedLabelLayers,
   ],
@@ -274,6 +311,50 @@ map.on("pitch", () => {
   pitchInput.value = p;
   pitchValue.textContent = Math.round(p);
 });
+
+// --- Airspace overlay ---
+
+const airspaceToggle = document.getElementById("airspaceToggle");
+const airspaceLegend = document.getElementById("airspaceLegend");
+const airspaceClassCheckboxes = [...airspaceLegend.querySelectorAll("input[data-airspace-class]")];
+
+function applyAirspaceFilter() {
+  const visibleClasses = airspaceClassCheckboxes.filter((cb) => cb.checked).map((cb) => cb.dataset.airspaceClass);
+  const filter = ["in", ["get", "class"], ["literal", visibleClasses]];
+  map.setFilter(AIRSPACE_FILL_LAYER_ID, filter);
+  map.setFilter(AIRSPACE_LINE_LAYER_ID, filter);
+}
+
+function applyAirspaceVisibility() {
+  const visibility = airspaceToggle.checked ? "visible" : "none";
+  map.setLayoutProperty(AIRSPACE_FILL_LAYER_ID, "visibility", visibility);
+  map.setLayoutProperty(AIRSPACE_LINE_LAYER_ID, "visibility", visibility);
+  airspaceLegend.classList.toggle("airspace-legend-disabled", !airspaceToggle.checked);
+}
+
+map.on("load", () => {
+  applyAirspaceFilter();
+  applyAirspaceVisibility();
+});
+airspaceToggle.addEventListener("change", applyAirspaceVisibility);
+airspaceClassCheckboxes.forEach((cb) => cb.addEventListener("change", applyAirspaceFilter));
+
+map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
+  const feature = e.features?.[0];
+  if (!feature) return;
+  const p = feature.properties;
+  new Popup({ closeButton: true, maxWidth: "260px" })
+    .setLngLat(e.lngLat)
+    .setHTML(
+      `<div class="airspace-popup">
+        <div class="airspace-popup-name">${escapeHtml(p.name)} <span style="color:#888">(Class ${escapeHtml(p.class)})</span></div>
+        <div class="airspace-popup-limits">${escapeHtml(p.floor)} &ndash; ${escapeHtml(p.ceiling)}</div>
+      </div>`
+    )
+    .addTo(map);
+});
+map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
+map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
 
 // --- Sites: read-only, from the baked-in sites.json ---
 

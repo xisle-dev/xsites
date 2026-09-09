@@ -255,11 +255,12 @@ func main() {
 	// Hand-authored viewer files (structurally different from the dynamic
 	// app) plus shared assets that are identical between both modes.
 	copies := map[string]string{
-		filepath.Join(root, "static", "index.html"): filepath.Join(out, "index.html"),
-		filepath.Join(root, "static", "app.js"):      filepath.Join(out, "app.js"),
-		filepath.Join(root, "style.css"):              filepath.Join(out, "style.css"),
-		filepath.Join(root, "favicon.svg"):            filepath.Join(out, "favicon.svg"),
-		filepath.Join(root, "logo.svg"):                filepath.Join(out, "logo.svg"),
+		filepath.Join(root, "static", "index.html"):     filepath.Join(out, "index.html"),
+		filepath.Join(root, "static", "app.js"):          filepath.Join(out, "app.js"),
+		filepath.Join(root, "style.css"):                  filepath.Join(out, "style.css"),
+		filepath.Join(root, "favicon.svg"):                filepath.Join(out, "favicon.svg"),
+		filepath.Join(root, "logo.svg"):                    filepath.Join(out, "logo.svg"),
+		filepath.Join(root, "data", "airspace.geojson"):    filepath.Join(out, "data", "airspace.geojson"),
 	}
 	for src, dst := range copies {
 		if err := copyFile(src, dst); err != nil {

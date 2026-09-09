@@ -34,6 +34,24 @@
 
         <label for="exaggeration">Terrain exaggeration: <span id="exaggerationValue">1.5</span>&times;</label>
         <input type="range" id="exaggeration" min="0.5" max="4" step="0.1" value="1.5" />
+
+        <div class="airspace-controls">
+          <label class="airspace-toggle-row">
+            <input type="checkbox" id="airspaceToggle" checked />
+            <span>Show airspace</span>
+          </label>
+          <div id="airspaceLegend" class="airspace-legend">
+            <label><input type="checkbox" data-airspace-class="B" /> <span class="swatch" style="background:#3b82f6"></span> Class B</label>
+            <label><input type="checkbox" data-airspace-class="C" checked /> <span class="swatch" style="background:#ec4899"></span> Class C</label>
+            <label><input type="checkbox" data-airspace-class="D" checked /> <span class="swatch" style="background:#22d3ee"></span> Class D</label>
+            <label><input type="checkbox" data-airspace-class="E" checked /> <span class="swatch" style="background:#a78bfa"></span> Class E</label>
+            <label><input type="checkbox" data-airspace-class="F" checked /> <span class="swatch" style="background:#f97316"></span> Class F (advisory)</label>
+            <label><input type="checkbox" data-airspace-class="SUA" checked /> <span class="swatch" style="background:#ef4444"></span> Restricted / danger</label>
+          </div>
+          <div class="airspace-attribution">
+            Airspace data &copy; <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors, CC BY-NC 4.0. Not for navigation.
+          </div>
+        </div>
       </div>
     </div>
 

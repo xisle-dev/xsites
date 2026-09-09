@@ -535,6 +535,77 @@ html, body {
   font-size: 12.5px;
 }
 
+/* --- Airspace overlay controls --- */
+
+.airspace-controls {
+  border-top: 1px solid #2a2e35;
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.airspace-toggle-row {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px !important;
+  font-size: 12.5px !important;
+  color: #f2f2f2 !important;
+  cursor: pointer;
+}
+
+.airspace-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.airspace-legend-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.airspace-legend label {
+  display: flex !important;
+  align-items: center;
+  gap: 7px;
+  margin: 0 !important;
+  font-size: 12px !important;
+  color: #cfd3d9 !important;
+  cursor: pointer;
+}
+
+.airspace-legend .swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.airspace-attribution {
+  margin-top: 8px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #6b7178;
+}
+
+.airspace-attribution a {
+  color: #7fb3ff;
+}
+
+.airspace-popup {
+  font-size: 12.5px;
+  color: #14161a;
+}
+
+.airspace-popup .airspace-popup-name {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.airspace-popup .airspace-popup-limits {
+  color: #4a505a;
+}
+
 .site-marker {
   width: 26px;
   height: 26px;
