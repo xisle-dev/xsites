@@ -619,7 +619,11 @@ function showAirspaceList(entries) {
   airspaceListView.hidden = false;
   expandPanel();
 
+  // A fresh click query supersedes whatever was pinned from the previous
+  // one -- otherwise its highlight/volume would keep showing for a shape
+  // that's no longer in the list.
   pinnedAirspaceRow = null;
+  setAirspaceHighlight(null);
   airspaceEntries.innerHTML = "";
   entries.forEach((entry) => {
     const row = document.createElement("div");
