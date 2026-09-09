@@ -588,6 +588,24 @@ function pinAirspaceRow(row, entry) {
   }
 }
 
+// FIRs share the "SUA" class label with restricted/danger areas (see
+// classLabel in tools/fetchairspace), so they can't be told apart by class
+// -- only by name -- and their SFC-FL999 span would otherwise sort them
+// wherever their (effectively arbitrary) ceiling lands instead of always
+// last, where their sheer size makes them the least specific answer.
+function isFir(entry) {
+  return /\bFIR\b/i.test(entry.properties.name);
+}
+
+function sortAirspaceEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const aFir = isFir(a);
+    const bFir = isFir(b);
+    if (aFir !== bFir) return aFir ? 1 : -1;
+    return (a.properties.ceilingM ?? Infinity) - (b.properties.ceilingM ?? Infinity);
+  });
+}
+
 function showAirspaceList(entries) {
   sitesListView.hidden = true;
   siteDetailView.hidden = true;
@@ -600,7 +618,9 @@ function showAirspaceList(entries) {
   pinnedAirspaceRow = null;
   setAirspaceHighlight(null);
   airspaceEntries.innerHTML = "";
-  entries.forEach((entry) => {
+  const sorted = sortAirspaceEntries(entries);
+  let firstRow = null;
+  sorted.forEach((entry, index) => {
     const row = document.createElement("div");
     row.className = "site-item";
     const nameEl = document.createElement("div");
@@ -621,7 +641,11 @@ function showAirspaceList(entries) {
     });
     row.addEventListener("click", () => pinAirspaceRow(row, entry));
     airspaceEntries.appendChild(row);
+    if (index === 0) firstRow = row;
   });
+  // Land straight on the lowest (most relevant) entry's highlight instead
+  // of making the user hover or click it themselves.
+  if (firstRow) pinAirspaceRow(firstRow, sorted[0]);
 }
 
 map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
