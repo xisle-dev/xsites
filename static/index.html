@@ -14,22 +14,22 @@
 
   <div id="panel">
     <div id="panelHandle" class="panel-handle" aria-hidden="true"></div>
-    <div class="panel-header">
+    <div class="panel-topbar">
       <div class="brand">
         <img src="logo.svg" alt="" class="brand-logo" />
         <h1>X/Sites</h1>
       </div>
-
+      <div class="zoom-controls">
+        <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+        <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+      </div>
+    </div>
+    <div class="panel-header">
       <button type="button" id="terrainToggle" class="terrain-toggle" aria-expanded="true">
         <span>Map Controls</span>
         <span class="chevron">&#9650;</span>
       </button>
       <div id="terrainContent" class="terrain-content">
-        <div class="zoom-controls">
-          <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
-          <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
-        </div>
-
         <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
         <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
 

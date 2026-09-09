@@ -377,7 +377,7 @@ if (panelHandle) {
     if (dragStartY === null) return;
     const delta = dragStartY - e.clientY;
     if (Math.abs(delta) > 4) dragMoved = true;
-    const expandedMax = window.innerHeight * 0.75;
+    const expandedMax = window.innerHeight / 3;
     const next = Math.min(expandedMax, Math.max(SHEET_COLLAPSED_HEIGHT, dragStartHeight + delta));
     panel.style.maxHeight = `${next}px`;
   });
@@ -387,7 +387,7 @@ if (panelHandle) {
     dragStartY = null;
     panel.style.transition = "";
     if (dragMoved) {
-      const expandedMax = window.innerHeight * 0.75;
+      const expandedMax = window.innerHeight / 3;
       const midpoint = (SHEET_COLLAPSED_HEIGHT + expandedMax) / 2;
       const currentHeight = panel.getBoundingClientRect().height;
       panel.classList.toggle("sheet-collapsed", currentHeight < midpoint);

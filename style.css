@@ -135,7 +135,7 @@ html, body {
     right: 0;
     bottom: 0;
     width: auto;
-    max-height: 75vh;
+    max-height: 33vh;
     border-radius: 16px 16px 0 0;
   }
 
@@ -160,11 +160,37 @@ html, body {
     border-radius: 2px;
     background: #4a505a;
   }
+
+  /* Taken out of #panel's flow entirely (fixed positioning does that) so
+     the logo and zoom controls stay reachable regardless of whether the
+     sheet below is collapsed, expanded, or scrolled to some other view. */
+  .panel-topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: rgba(20, 22, 26, 0.92);
+    border-radius: 0 0 10px 10px;
+    padding: 12px 16px;
+  }
 }
 
 .panel-header {
   flex: 0 0 auto;
   padding: 16px 18px 4px;
+}
+
+.panel-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 8px;
+}
+
+.panel-topbar .zoom-controls {
+  margin: 0;
 }
 
 .brand {
