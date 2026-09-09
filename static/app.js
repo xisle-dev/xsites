@@ -560,7 +560,33 @@ function setAirspaceHighlight(geometry, properties) {
 // (a map popup would be pinned to a point that's often hidden behind it).
 const airspaceListView = document.getElementById("airspaceListView");
 const airspaceEntries = document.getElementById("airspaceEntries");
-document.getElementById("airspaceBackBtn").addEventListener("click", showListView);
+document.getElementById("airspaceBackBtn").addEventListener("click", () => {
+  pinAirspaceRow(null);
+  showListView();
+});
+
+// The row currently pinned by a click, if any -- kept highlighted (and
+// re-highlighted after a hover elsewhere ends) so it survives map
+// panning/rotating instead of only showing while the pointer sits on the
+// row. { row, entry } or null.
+let pinnedAirspaceRow = null;
+
+function pinAirspaceRow(row, entry) {
+  if (pinnedAirspaceRow) pinnedAirspaceRow.row.classList.remove("airspace-pinned");
+  if (row && pinnedAirspaceRow && pinnedAirspaceRow.row === row) {
+    // Clicking the already-pinned row again unpins it.
+    pinnedAirspaceRow = null;
+    setAirspaceHighlight(null);
+    return;
+  }
+  pinnedAirspaceRow = row ? { row, entry } : null;
+  if (pinnedAirspaceRow) {
+    row.classList.add("airspace-pinned");
+    setAirspaceHighlight(entry.geometry, entry.properties);
+  } else {
+    setAirspaceHighlight(null);
+  }
+}
 
 function showAirspaceList(entries) {
   sitesListView.hidden = true;
@@ -568,6 +594,7 @@ function showAirspaceList(entries) {
   airspaceListView.hidden = false;
   expandPanel();
 
+  pinnedAirspaceRow = null;
   airspaceEntries.innerHTML = "";
   entries.forEach((entry) => {
     const row = document.createElement("div");
@@ -584,7 +611,11 @@ function showAirspaceList(entries) {
     limitsEl.textContent = `${entry.properties.floor} – ${entry.properties.ceiling}`;
     row.append(nameEl, limitsEl);
     row.addEventListener("mouseenter", () => setAirspaceHighlight(entry.geometry, entry.properties));
-    row.addEventListener("mouseleave", () => setAirspaceHighlight(null));
+    row.addEventListener("mouseleave", () => {
+      if (pinnedAirspaceRow) setAirspaceHighlight(pinnedAirspaceRow.entry.geometry, pinnedAirspaceRow.entry.properties);
+      else setAirspaceHighlight(null);
+    });
+    row.addEventListener("click", () => pinAirspaceRow(row, entry));
     airspaceEntries.appendChild(row);
   });
 }

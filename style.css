@@ -388,6 +388,11 @@ html, body {
   background: #262a31;
 }
 
+.site-item.airspace-pinned {
+  background: #2f3542;
+  box-shadow: inset 3px 0 0 #ffffff;
+}
+
 .site-item .site-name {
   font-size: 13px;
   font-weight: 600;
