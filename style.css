@@ -607,7 +607,14 @@ html, body {
 }
 
 .airspace-popup .airspace-popup-entry {
-  padding: 2px 0;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
+  cursor: default;
+}
+
+.airspace-popup .airspace-popup-entry:hover {
+  background: #f0f2f5;
 }
 
 .airspace-popup .airspace-popup-sep {

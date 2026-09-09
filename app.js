@@ -87,6 +87,8 @@ const LABELS_SOURCE_ID = "labels";
 const AIRSPACE_SOURCE_ID = "airspace";
 const AIRSPACE_FILL_LAYER_ID = "airspace-fill";
 const AIRSPACE_LINE_LAYER_ID = "airspace-line";
+const AIRSPACE_HIGHLIGHT_SOURCE_ID = "airspace-highlight";
+const AIRSPACE_HIGHLIGHT_LAYER_ID = "airspace-highlight-line";
 
 // Canadian airspace (NAV CANADA data via OpenAIP, CC BY-NC 4.0), pre-filtered
 // to the Vancouver Island flying area by tools/fetchairspace -- see that
@@ -229,6 +231,10 @@ const style = {
       data: `${window.location.origin}/data/airspace.geojson`,
       attribution: '© <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors (CC BY-NC 4.0)',
     },
+    [AIRSPACE_HIGHLIGHT_SOURCE_ID]: {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    },
   },
   layers: [
     {
@@ -268,6 +274,14 @@ const style = {
       type: "line",
       source: AIRSPACE_SOURCE_ID,
       paint: { "line-color": airspaceColorExpr, "line-width": 1.5, "line-opacity": 0.85 },
+    },
+    {
+      // Traces whichever airspace entry the pointer is over in the click
+      // popup's list -- fed by setAirspaceHighlight, empty otherwise.
+      id: AIRSPACE_HIGHLIGHT_LAYER_ID,
+      type: "line",
+      source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
+      paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.95 },
     },
     ...tunedLabelLayers,
   ],
@@ -364,6 +378,44 @@ map.on("load", () => {
 airspaceToggle.addEventListener("change", applyAirspaceVisibility);
 airspaceClassCheckboxes.forEach((cb) => cb.addEventListener("change", applyAirspaceFilter));
 
+// Traces the given geometry (or clears the trace if null) in the
+// highlight layer -- used so hovering a popup list entry shows which
+// polygon on the map it refers to.
+function setAirspaceHighlight(geometry) {
+  const source = map.getSource(AIRSPACE_HIGHLIGHT_SOURCE_ID);
+  if (!source) return;
+  source.setData(
+    geometry
+      ? { type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: {} }] }
+      : { type: "FeatureCollection", features: [] }
+  );
+}
+
+function buildAirspacePopupContent(entries) {
+  const container = document.createElement("div");
+  container.className = "airspace-popup";
+  entries.forEach((entry, i) => {
+    if (i > 0) container.appendChild(Object.assign(document.createElement("hr"), { className: "airspace-popup-sep" }));
+    const row = document.createElement("div");
+    row.className = "airspace-popup-entry";
+    const nameEl = document.createElement("div");
+    nameEl.className = "airspace-popup-name";
+    nameEl.textContent = entry.properties.name;
+    const classSpan = document.createElement("span");
+    classSpan.style.color = "#888";
+    classSpan.textContent = ` (Class ${entry.properties.class})`;
+    nameEl.appendChild(classSpan);
+    const limitsEl = document.createElement("div");
+    limitsEl.className = "airspace-popup-limits";
+    limitsEl.textContent = `${entry.properties.floor} – ${entry.properties.ceiling}`;
+    row.append(nameEl, limitsEl);
+    row.addEventListener("mouseenter", () => setAirspaceHighlight(entry.geometry));
+    row.addEventListener("mouseleave", () => setAirspaceHighlight(null));
+    container.appendChild(row);
+  });
+  return container;
+}
+
 map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
   // Don't pop up airspace info while the user is trying to place/reposition
   // a site pin -- let the general click handler below handle it instead.
@@ -380,21 +432,13 @@ map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
     const key = `${p.name}|${p.class}|${p.floor}|${p.ceiling}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    entries.push(p);
+    entries.push({ properties: p, geometry: f.geometry });
   }
-  const html = entries
-    .map(
-      (p) => `
-      <div class="airspace-popup-entry">
-        <div class="airspace-popup-name">${escapeHtml(p.name)} <span style="color:#888">(Class ${escapeHtml(p.class)})</span></div>
-        <div class="airspace-popup-limits">${escapeHtml(p.floor)} &ndash; ${escapeHtml(p.ceiling)}</div>
-      </div>`
-    )
-    .join('<hr class="airspace-popup-sep" />');
-  new Popup({ closeButton: true, maxWidth: "280px" })
+  const popup = new Popup({ closeButton: true, maxWidth: "280px" })
     .setLngLat(e.lngLat)
-    .setHTML(`<div class="airspace-popup">${html}</div>`)
-    .addTo(map);
+    .setDOMContent(buildAirspacePopupContent(entries));
+  popup.on("close", () => setAirspaceHighlight(null));
+  popup.addTo(map);
 });
 map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
 map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
