@@ -88,6 +88,7 @@ const AIRSPACE_FILL_LAYER_ID = "airspace-fill";
 const AIRSPACE_LINE_LAYER_ID = "airspace-line";
 const AIRSPACE_HIGHLIGHT_SOURCE_ID = "airspace-highlight";
 const AIRSPACE_HIGHLIGHT_LAYER_ID = "airspace-highlight-line";
+const AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID = "airspace-highlight-label";
 
 // Canadian airspace (NAV CANADA data via OpenAIP, CC BY-NC 4.0), pre-filtered
 // to the Vancouver Island flying area by tools/fetchairspace -- see that
@@ -283,6 +284,26 @@ const style = {
       paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.95 },
     },
     ...tunedLabelLayers,
+    {
+      // All the text info the panel row shows (name, class, floor/ceiling),
+      // put directly on the map next to whatever's highlighted -- last in
+      // the stack so it's never covered by a place-name label.
+      id: AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID,
+      type: "symbol",
+      source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
+      layout: {
+        "text-field": ["concat", ["get", "name"], " (", ["get", "class"], ")\n", ["get", "floor"], " – ", ["get", "ceiling"]],
+        "text-size": 13,
+        "text-anchor": "center",
+        "text-justify": "center",
+        "text-max-width": 14,
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "#000000",
+        "text-halo-width": 1.5,
+      },
+    },
   ],
 };
 
@@ -454,15 +475,24 @@ map.on("load", () => {
 airspaceToggle.addEventListener("change", applyAirspaceVisibility);
 airspaceClassCheckboxes.forEach((cb) => cb.addEventListener("change", applyAirspaceFilter));
 
-// Traces the given geometry (or clears the trace if null) in the
-// highlight layer -- used so hovering a popup list entry shows which
-// polygon on the map it refers to.
-function setAirspaceHighlight(geometry) {
+// Traces the given geometry (or clears the trace if null) in the highlight
+// layer, carrying `properties` along so the label layer can show the same
+// name/class/floor/ceiling the panel row does -- used so hovering a panel
+// entry shows which polygon on the map it refers to, with its full details,
+// without having to look back at the panel to read them.
+//
+// `properties` here is a Feature.properties object handed back by
+// queryRenderedFeatures, which isn't a plain Object -- passing it straight
+// into setData() makes the source silently drop the feature entirely
+// (setData()/isSourceLoaded() both still report success, but nothing is
+// ever tiled or rendered, and there's no error to catch). Spreading it into
+// a genuine plain object first fixes it.
+function setAirspaceHighlight(geometry, properties) {
   const source = map.getSource(AIRSPACE_HIGHLIGHT_SOURCE_ID);
   if (!source) return;
   source.setData(
     geometry
-      ? { type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: {} }] }
+      ? { type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: { ...properties } }] }
       : { type: "FeatureCollection", features: [] }
   );
 }
@@ -499,7 +529,7 @@ function showAirspaceList(entries) {
     limitsEl.className = "site-area";
     limitsEl.textContent = `${entry.properties.floor} – ${entry.properties.ceiling}`;
     row.append(nameEl, limitsEl);
-    row.addEventListener("mouseenter", () => setAirspaceHighlight(entry.geometry));
+    row.addEventListener("mouseenter", () => setAirspaceHighlight(entry.geometry, entry.properties));
     row.addEventListener("mouseleave", () => setAirspaceHighlight(null));
     airspaceEntries.appendChild(row);
   });
