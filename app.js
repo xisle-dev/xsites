@@ -334,12 +334,23 @@ exaggerationInput.addEventListener("input", (e) => {
   applyTerrain();
 });
 
-const terrainToggle = document.getElementById("terrainToggle");
+// Map Controls (pitch/exaggeration/airspace legend) lives in a dropdown off
+// the hamburger button in the header, not inline in the panel/sheet -- closes
+// on a second click of the button or a click anywhere outside it.
+const mapControlsMenu = document.getElementById("mapControlsMenu");
+const mapControlsToggle = document.getElementById("mapControlsToggle");
 const terrainContent = document.getElementById("terrainContent");
-terrainToggle.addEventListener("click", () => {
-  const expanded = terrainToggle.getAttribute("aria-expanded") === "true";
-  terrainToggle.setAttribute("aria-expanded", String(!expanded));
+mapControlsToggle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const expanded = mapControlsToggle.getAttribute("aria-expanded") === "true";
+  mapControlsToggle.setAttribute("aria-expanded", String(!expanded));
   terrainContent.hidden = expanded;
+});
+document.addEventListener("click", (e) => {
+  if (!terrainContent.hidden && !mapControlsMenu.contains(e.target)) {
+    mapControlsToggle.setAttribute("aria-expanded", "false");
+    terrainContent.hidden = true;
+  }
 });
 
 // Keep the pitch slider in sync when pitch changes some other way (flyTo,
@@ -365,15 +376,6 @@ const SHEET_COLLAPSED_HEIGHT = 64;
 
 function isMobileSheet() {
   return window.matchMedia("(max-width: 700px)").matches;
-}
-
-// Map Controls (pitch/exaggeration/airspace legend) defaults to expanded,
-// which is fine beside a full-height desktop panel but eats most of a
-// mobile sheet's limited height -- start collapsed there so the site list
-// is what's actually visible first.
-if (isMobileSheet()) {
-  terrainToggle.setAttribute("aria-expanded", "false");
-  terrainContent.hidden = true;
 }
 
 // Used whenever new content appears (a site or airspace selection) so it's
