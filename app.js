@@ -368,17 +368,32 @@ map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
   // Don't pop up airspace info while the user is trying to place/reposition
   // a site pin -- let the general click handler below handle it instead.
   if (placingMode) return;
-  const feature = e.features?.[0];
-  if (!feature) return;
-  const p = feature.properties;
-  new Popup({ closeButton: true, maxWidth: "260px" })
-    .setLngLat(e.lngLat)
-    .setHTML(
-      `<div class="airspace-popup">
+  if (!e.features || e.features.length === 0) return;
+  // A click point commonly sits inside several stacked airspace volumes at
+  // once (e.g. a Class E floor under a Class B shelf) -- list all of them,
+  // not just whichever rendered on top. De-duped since a feature can be
+  // reported more than once where it crosses a tile boundary.
+  const seen = new Set();
+  const entries = [];
+  for (const f of e.features) {
+    const p = f.properties;
+    const key = `${p.name}|${p.class}|${p.floor}|${p.ceiling}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push(p);
+  }
+  const html = entries
+    .map(
+      (p) => `
+      <div class="airspace-popup-entry">
         <div class="airspace-popup-name">${escapeHtml(p.name)} <span style="color:#888">(Class ${escapeHtml(p.class)})</span></div>
         <div class="airspace-popup-limits">${escapeHtml(p.floor)} &ndash; ${escapeHtml(p.ceiling)}</div>
       </div>`
     )
+    .join('<hr class="airspace-popup-sep" />');
+  new Popup({ closeButton: true, maxWidth: "280px" })
+    .setLngLat(e.lngLat)
+    .setHTML(`<div class="airspace-popup">${html}</div>`)
     .addTo(map);
 });
 map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });

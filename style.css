@@ -606,6 +606,16 @@ html, body {
   color: #4a505a;
 }
 
+.airspace-popup .airspace-popup-entry {
+  padding: 2px 0;
+}
+
+.airspace-popup .airspace-popup-sep {
+  border: none;
+  border-top: 1px solid #e2e4e8;
+  margin: 6px 0;
+}
+
 .site-marker {
   width: 26px;
   height: 26px;
