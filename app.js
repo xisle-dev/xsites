@@ -88,6 +88,7 @@ const AIRSPACE_FILL_LAYER_ID = "airspace-fill";
 const AIRSPACE_LINE_LAYER_ID = "airspace-line";
 const AIRSPACE_HIGHLIGHT_SOURCE_ID = "airspace-highlight";
 const AIRSPACE_HIGHLIGHT_LAYER_ID = "airspace-highlight-line";
+const AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID = "airspace-highlight-volume";
 const AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID = "airspace-highlight-label";
 
 // Canadian airspace (NAV CANADA data via OpenAIP, CC BY-NC 4.0), pre-filtered
@@ -282,6 +283,22 @@ const style = {
       type: "line",
       source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
       paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.95 },
+    },
+    {
+      // Real floor-to-ceiling volume, but only for the single currently
+      // highlighted entry -- every other airspace region stays flat 2D, so
+      // hovering doesn't turn the whole map into a forest of glass boxes.
+      // extrusionBase/extrusionTop are computed (terrain-corrected) and
+      // attached to the feature in setAirspaceHighlight.
+      id: AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID,
+      type: "fill-extrusion",
+      source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
+      paint: {
+        "fill-extrusion-color": "#ffffff",
+        "fill-extrusion-opacity": 0.35,
+        "fill-extrusion-base": ["get", "extrusionBase"],
+        "fill-extrusion-height": ["get", "extrusionTop"],
+      },
     },
     ...tunedLabelLayers,
     {
@@ -487,14 +504,76 @@ airspaceClassCheckboxes.forEach((cb) => cb.addEventListener("change", applyAirsp
 // (setData()/isSourceLoaded() both still report success, but nothing is
 // ever tiled or rendered, and there's no error to catch). Spreading it into
 // a genuine plain object first fixes it.
+// Rough centroid (mean vertex of its largest ring) of a Polygon/
+// MultiPolygon, used only as a sample point for queryTerrainElevation --
+// doesn't need to be precise, just reliably inside the shape.
+function polygonCentroid(geometry) {
+  const rings =
+    geometry.type === "Polygon"
+      ? [geometry.coordinates[0]]
+      : geometry.type === "MultiPolygon"
+        ? geometry.coordinates.map((poly) => poly[0])
+        : [];
+  let bestRing = null;
+  let bestArea = -1;
+  for (const ring of rings) {
+    let area = 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+      area += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+    }
+    area = Math.abs(area);
+    if (area > bestArea) {
+      bestArea = area;
+      bestRing = ring;
+    }
+  }
+  if (!bestRing) return null;
+  let x = 0;
+  let y = 0;
+  for (const [lon, lat] of bestRing) {
+    x += lon;
+    y += lat;
+  }
+  return [x / bestRing.length, y / bestRing.length];
+}
+
+// Caps the highlight volume's height above its base so an SFC-FL999 FIR
+// boundary (or similarly tall SUA) still renders as a visible wall instead
+// of an unusable ~30km-tall column.
+const MAX_HIGHLIGHT_EXTRUSION_M = 3500;
+
+// Converts a feature's floorM/ceilingM (each either already ground-relative
+// ("GND") or sea-level-referenced ("MSL") -- see tools/fetchairspace's
+// outProperties comment) into base/top meters for the highlight
+// fill-extrusion layer, which is itself ground-relative once terrain is on.
+// MSL values need the local ground elevation at the shape subtracted.
+function computeExtrusionRange(geometry, props) {
+  const { floorM, floorDatum, ceilingM, ceilingDatum } = props;
+  if (typeof floorM !== "number" || typeof ceilingM !== "number") return [0, 0];
+  const centroid = polygonCentroid(geometry);
+  let groundElevation = 0;
+  if (centroid) {
+    const elevation = map.queryTerrainElevation({ lng: centroid[0], lat: centroid[1] });
+    if (typeof elevation === "number") groundElevation = elevation;
+  }
+  const base = floorDatum === "MSL" ? Math.max(0, floorM - groundElevation) : floorM;
+  const rawTop = ceilingDatum === "MSL" ? Math.max(base, ceilingM - groundElevation) : ceilingM;
+  const top = Math.min(rawTop, base + MAX_HIGHLIGHT_EXTRUSION_M);
+  return [base, top];
+}
+
 function setAirspaceHighlight(geometry, properties) {
   const source = map.getSource(AIRSPACE_HIGHLIGHT_SOURCE_ID);
   if (!source) return;
-  source.setData(
-    geometry
-      ? { type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: { ...properties } }] }
-      : { type: "FeatureCollection", features: [] }
-  );
+  if (!geometry) {
+    source.setData({ type: "FeatureCollection", features: [] });
+    return;
+  }
+  const plainProps = { ...properties };
+  const [extrusionBase, extrusionTop] = computeExtrusionRange(geometry, plainProps);
+  plainProps.extrusionBase = extrusionBase;
+  plainProps.extrusionTop = extrusionTop;
+  source.setData({ type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: plainProps }] });
 }
 
 // Airspace selections share the same panel/sheet as the sites list and

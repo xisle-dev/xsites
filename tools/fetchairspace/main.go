@@ -62,6 +62,18 @@ type outProperties struct {
 	Class   string `json:"class"`
 	Floor   string `json:"floor"`
 	Ceiling string `json:"ceiling"`
+	// Numeric limits in meters, used to extrude the single highlighted
+	// airspace into a real 3D volume (see setAirspaceHighlight in app.js).
+	// Datum is "GND" (already ground-relative -- use directly as extrusion
+	// base/height) or "MSL" (sea-level-referenced -- the client subtracts
+	// local terrain elevation at render time, since fill-extrusion's
+	// base/height are ground-relative once terrain is on). Flight levels
+	// are converted to an approximate MSL feet equivalent (standard-
+	// atmosphere assumption -- fine for this non-navigational visual).
+	FloorM       float64 `json:"floorM"`
+	FloorDatum   string  `json:"floorDatum"`
+	CeilingM     float64 `json:"ceilingM"`
+	CeilingDatum string  `json:"ceilingDatum"`
 }
 
 type outCollection struct {
@@ -96,6 +108,21 @@ func classLabel(c int) string {
 	default:
 		return "?"
 	}
+}
+
+const feetToMeters = 0.3048
+
+// toMeters converts a raw limit to meters plus which datum it's relative
+// to. Flight levels (unit 6, always paired with the STD datum) are treated
+// as an MSL feet equivalent -- see the outProperties comment.
+func toMeters(a rawAlt) (meters float64, datum string) {
+	if a.Unit == 6 {
+		return a.Value * 100 * feetToMeters, "MSL"
+	}
+	if a.ReferenceDatum == 0 {
+		return a.Value * feetToMeters, "GND"
+	}
+	return a.Value * feetToMeters, "MSL"
 }
 
 func formatLimit(a rawAlt) string {
@@ -208,13 +235,19 @@ func main() {
 		if err != nil || !overlap {
 			continue
 		}
+		floorM, floorDatum := toMeters(f.Properties.LowerLimit)
+		ceilingM, ceilingDatum := toMeters(f.Properties.UpperLimit)
 		result.Features = append(result.Features, outFeature{
 			Type: "Feature",
 			Properties: outProperties{
-				Name:    f.Properties.Name,
-				Class:   classLabel(f.Properties.IcaoClass),
-				Floor:   formatLimit(f.Properties.LowerLimit),
-				Ceiling: formatLimit(f.Properties.UpperLimit),
+				Name:         f.Properties.Name,
+				Class:        classLabel(f.Properties.IcaoClass),
+				Floor:        formatLimit(f.Properties.LowerLimit),
+				Ceiling:      formatLimit(f.Properties.UpperLimit),
+				FloorM:       floorM,
+				FloorDatum:   floorDatum,
+				CeilingM:     ceilingM,
+				CeilingDatum: ceilingDatum,
 			},
 			Geometry: f.Geometry,
 		})
