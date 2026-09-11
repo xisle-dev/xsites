@@ -700,6 +700,7 @@ map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.curso
 
 let sites = [];
 const markersById = {};
+const labelMarkersById = {};
 // null while inactive; "new" while placing a brand-new site (from the list's
 // "+ Add" button, before any form is open); "reposition" while updating the
 // pin of whichever form (add or edit) is currently open.
@@ -802,6 +803,8 @@ function fitToVisibleSites() {
 function renderMarkers() {
   for (const id in markersById) markersById[id].remove();
   for (const id in markersById) delete markersById[id];
+  for (const id in labelMarkersById) labelMarkersById[id].remove();
+  for (const id in labelMarkersById) delete labelMarkersById[id];
   for (const site of getFilteredSites()) {
     if (typeof site.latitude !== "number" || typeof site.longitude !== "number") continue;
     const el = document.createElement("div");
@@ -815,6 +818,17 @@ function renderMarkers() {
       .setLngLat([site.longitude, site.latitude])
       .addTo(map);
     markersById[site.id] = marker;
+
+    // A second, independent marker just for the name text, anchored to the
+    // same point -- kept completely separate from the pin marker above so
+    // labeling can't affect the pin's own element/sizing/positioning.
+    const labelEl = document.createElement("div");
+    labelEl.className = "site-marker-label";
+    labelEl.textContent = site.name;
+    const labelMarker = new Marker({ element: labelEl, anchor: "left", offset: [10, 0] })
+      .setLngLat([site.longitude, site.latitude])
+      .addTo(map);
+    labelMarkersById[site.id] = labelMarker;
   }
 }
 
