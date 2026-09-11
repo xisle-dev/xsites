@@ -43,6 +43,8 @@ func main() {
 		".jpg":  "image/jpeg",
 		".jpeg": "image/jpeg",
 		".gif":  "image/gif",
+		".pdf":  "application/pdf",
+		".gpx":  "application/gpx+xml",
 	} {
 		mime.AddExtensionType(ext, ct)
 	}
@@ -54,6 +56,7 @@ func main() {
 	mux.HandleFunc("PUT /api/sites/{id}", handleUpdateSite)
 	mux.HandleFunc("DELETE /api/sites/{id}", handleDeleteSite)
 	mux.HandleFunc("POST /api/sites/{id}/media", handleUploadMedia)
+	mux.HandleFunc("PUT /api/sites/{id}/media/{filename}", handleUpdateMedia)
 	mux.HandleFunc("DELETE /api/sites/{id}/media/{filename}", handleDeleteMedia)
 	mux.HandleFunc("GET /media/{id}/{rest...}", handleMedia(absRoot))
 
@@ -182,8 +185,26 @@ func handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 }
 
 type mediaUploadBody struct {
-	Filename   string `json:"filename"`
-	DataBase64 string `json:"dataBase64"`
+	Filename    string `json:"filename"`
+	DataBase64  string `json:"dataBase64"`
+	Description string `json:"description"`
+}
+
+// mediaTypeForFilename classifies an uploaded file by extension into one of
+// the gallery's known media kinds, so the UI can render it appropriately
+// (image thumbnail vs. a named PDF/GPX link) without trusting a client-
+// supplied type. The empty string means "not an accepted media type".
+func mediaTypeForFilename(filename string) string {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".png", ".jpg", ".jpeg", ".gif":
+		return "photo"
+	case ".pdf":
+		return "pdf"
+	case ".gpx":
+		return "gpx"
+	default:
+		return ""
+	}
 }
 
 func handleUploadMedia(w http.ResponseWriter, r *http.Request) {
@@ -197,12 +218,17 @@ func handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid JSON body")
 		return
 	}
+	filename := safeFileName(body.Filename)
+	mediaType := mediaTypeForFilename(filename)
+	if mediaType == "" {
+		writeError(w, 400, "unsupported file type (use PNG, JPG, PDF, or GPX)")
+		return
+	}
 	data, err := base64.StdEncoding.DecodeString(body.DataBase64)
 	if err != nil {
 		writeError(w, 400, "invalid dataBase64")
 		return
 	}
-	filename := safeFileName(body.Filename)
 	mediaDir := filepath.Join(sitesDir, id, "media")
 	if err := os.MkdirAll(mediaDir, 0755); err != nil {
 		writeError(w, 500, err.Error())
@@ -218,17 +244,72 @@ func handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	site.References = append(site.References, Reference{
-		Type:  "photo",
-		Title: filename,
-		URL:   "/media/" + id + "/" + filename,
-	})
+	newRef := Reference{
+		Type:        mediaType,
+		Title:       filename,
+		Description: body.Description,
+		URL:         "/media/" + id + "/" + filename,
+	}
+	// Re-uploading the same filename overwrites the file on disk above --
+	// replace its reference in place too, rather than appending a second
+	// entry that would now point at the new file's content.
+	replaced := false
+	for i := range site.References {
+		if site.References[i].URL == newRef.URL {
+			site.References[i] = newRef
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		site.References = append(site.References, newRef)
+	}
 	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
 	saved, _ := readSiteYaml(siteYamlPath(id), id)
 	writeJSON(w, 201, saved)
+}
+
+type mediaUpdateBody struct {
+	Description string `json:"description"`
+}
+
+func handleUpdateMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	filename := r.PathValue("filename")
+	if !siteExists(id) {
+		writeError(w, 404, "not found")
+		return
+	}
+	var body mediaUpdateBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "invalid JSON body")
+		return
+	}
+	site, err := readSiteYaml(siteYamlPath(id), id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	found := false
+	for i := range site.References {
+		if strings.HasSuffix(site.References[i].URL, "/"+filename) {
+			site.References[i].Description = body.Description
+			found = true
+		}
+	}
+	if !found {
+		writeError(w, 404, "media not found")
+		return
+	}
+	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	saved, _ := readSiteYaml(siteYamlPath(id), id)
+	writeJSON(w, 200, saved)
 }
 
 func handleDeleteMedia(w http.ResponseWriter, r *http.Request) {

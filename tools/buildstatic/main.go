@@ -24,9 +24,10 @@ import (
 )
 
 type Reference struct {
-	Type  string `json:"type"`
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
 }
 
 type Site struct {
@@ -107,6 +108,8 @@ func setRefField(r *Reference, key, val string) {
 		r.Type = val
 	case "title":
 		r.Title = val
+	case "description":
+		r.Description = val
 	case "url":
 		r.URL = val
 	}

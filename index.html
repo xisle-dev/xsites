@@ -10,7 +10,7 @@
   <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
        (e.g. to the current unix time) whenever either file changes, since a
        plain reload isn't reliably enough to pick up a new version. -->
-  <link rel="stylesheet" href="style.css?v=1789152824" />
+  <link rel="stylesheet" href="style.css?v=1789153707" />
 </head>
 <body>
   <div id="map"></div>
@@ -125,6 +125,11 @@
       <button type="button" id="useCurrentViewBtn">Use current map view</button>
       <div id="fViewSummary" class="hint"></div>
 
+      <div class="section-label">Media</div>
+      <div class="media-list" id="mediaList"></div>
+      <input type="file" id="mediaInput" accept=".png,.jpg,.jpeg,.pdf,.gpx" />
+      <p class="hint" id="mediaHint" hidden>Save the site first to add photos, PDFs, or GPX tracks.</p>
+
       <div class="buttons">
         <button type="submit" id="saveSiteBtn">Save</button>
       </div>
@@ -134,6 +139,6 @@
   <div id="placingBanner" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
-  <script type="module" src="app.js?v=1789099112"></script>
+  <script type="module" src="app.js?v=1789170839"></script>
 </body>
 </html>

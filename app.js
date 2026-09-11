@@ -128,6 +128,9 @@ const AIRSPACE_HIGHLIGHT_SOURCE_ID = "airspace-highlight";
 const AIRSPACE_HIGHLIGHT_LAYER_ID = "airspace-highlight-line";
 const AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID = "airspace-highlight-volume";
 const AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID = "airspace-highlight-label";
+const SITE_TRACKS_SOURCE_ID = "site-tracks";
+const SITE_TRACKS_CASING_LAYER_ID = "site-tracks-casing";
+const SITE_TRACKS_LAYER_ID = "site-tracks-line";
 
 // Canadian airspace (NAV CANADA data via OpenAIP, CC BY-NC 4.0), pre-filtered
 // to the Vancouver Island flying area by tools/fetchairspace -- see that
@@ -276,6 +279,12 @@ const style = {
       type: "geojson",
       data: { type: "FeatureCollection", features: [] },
     },
+    [SITE_TRACKS_SOURCE_ID]: {
+      // Populated from the selected site's GPX references (see
+      // loadSiteTracks) -- empty while no site is selected or it has none.
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    },
   },
   layers: [
     {
@@ -360,6 +369,24 @@ const style = {
         "text-halo-color": "#000000",
         "text-halo-width": 1.5,
       },
+    },
+    {
+      // Dark casing under the track line so it stays legible over bright
+      // satellite imagery (snow, sand, pale terrain) as well as dark forest.
+      id: SITE_TRACKS_CASING_LAYER_ID,
+      type: "line",
+      source: SITE_TRACKS_SOURCE_ID,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#000000", "line-width": 10, "line-opacity": 0.4 },
+    },
+    {
+      // Butt caps (not round) so the dashes themselves read as clean dashes
+      // rather than a chain of little pills.
+      id: SITE_TRACKS_LAYER_ID,
+      type: "line",
+      source: SITE_TRACKS_SOURCE_ID,
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: { "line-color": "#ffcc00", "line-width": 5, "line-dasharray": [2, 2] },
     },
   ],
 };
@@ -764,6 +791,7 @@ const labelMarkersById = {};
 let placingMode = null;
 let editingId = null; // null while adding a new site
 let formView = null; // {latitude, longitude, zoom, bearing, pitch} camera preset for the form in progress
+let formSite = null; // site object backing the open form's media list; null until the site exists (saved at least once)
 
 const sitesListView = document.getElementById("sitesListView");
 const siteDetailView = document.getElementById("siteDetailView");
@@ -774,6 +802,9 @@ const areaFilter = document.getElementById("areaFilter");
 const siteDetailContent = document.getElementById("siteDetailContent");
 const placingBanner = document.getElementById("placingBanner");
 const fViewSummary = document.getElementById("fViewSummary");
+const mediaList = document.getElementById("mediaList");
+const mediaInput = document.getElementById("mediaInput");
+const mediaHint = document.getElementById("mediaHint");
 
 // The existing site data was originally authored with Quill (its "ql-ui"
 // spans and data-list attributes show up in a few description/hazards
@@ -798,6 +829,77 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
+}
+
+// Shared rendering for a site's media (references with type photo/pdf/gpx):
+// a photo renders as an actual thumbnail, everything else as a short kind
+// label (PDF/GPX) since there's no useful thumbnail to show.
+function mediaKindLabel(type) {
+  return type === "pdf" ? "PDF" : type === "gpx" ? "GPX" : "FILE";
+}
+
+// Read-only photo thumbnail, linking out to the full image.
+function mediaThumbHtml(r) {
+  return `
+    <a class="media-thumb" href="${escapeHtml(r.url)}" target="_blank" rel="noopener">
+      <img src="${escapeHtml(r.url)}" alt="${escapeHtml(r.description || r.title || "")}" />
+    </a>`;
+}
+
+// Read-only PDF/GPX row: a named link plus its description. GPX tracks
+// download (viewing raw XML inline isn't useful); PDFs open in a new tab.
+function mediaFileRowHtml(r) {
+  const filename = r.url.split("/").pop();
+  return `
+    <a class="media-file-row" href="${escapeHtml(r.url)}" target="_blank" rel="noopener"${r.type === "gpx" ? " download" : ""}>
+      <span class="media-file-kind">${mediaKindLabel(r.type)}</span>
+      <span class="media-file-title">${escapeHtml(r.title || filename)}</span>
+      ${r.description ? `<span class="media-file-desc">${escapeHtml(r.description)}</span>` : ""}
+    </a>`;
+}
+
+// Pulls track (or, failing that, route) point sequences out of a GPX file's
+// XML -- just the lon/lat pairs needed to draw a line, nothing else in the
+// schema (elevation, time, waypoints) is used anywhere in this app.
+function parseGpxLineStrings(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, "application/xml");
+  if (doc.querySelector("parsererror")) return [];
+  const coordsOf = (el, pointTag) =>
+    [...el.querySelectorAll(pointTag)]
+      .map((pt) => [parseFloat(pt.getAttribute("lon")), parseFloat(pt.getAttribute("lat"))])
+      .filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat));
+  let segments = [...doc.querySelectorAll("trkseg")].map((seg) => coordsOf(seg, "trkpt")).filter((c) => c.length >= 2);
+  if (segments.length === 0) {
+    segments = [...doc.querySelectorAll("rte")].map((rte) => coordsOf(rte, "rtept")).filter((c) => c.length >= 2);
+  }
+  return segments.map((coordinates) => ({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } }));
+}
+
+function setSiteTracks(features) {
+  const source = map.getSource(SITE_TRACKS_SOURCE_ID);
+  if (source) source.setData({ type: "FeatureCollection", features });
+}
+
+// Fetches and draws every GPX reference on the given site as map lines.
+// Fire-and-forget from showDetail -- a slow/failed fetch just means the
+// track appears late or not at all, not worth blocking the detail view for.
+async function loadSiteTracks(site) {
+  const gpxRefs = (site.references || []).filter((r) => r.type === "gpx");
+  if (gpxRefs.length === 0) {
+    setSiteTracks([]);
+    return;
+  }
+  const perFile = await Promise.all(
+    gpxRefs.map(async (r) => {
+      try {
+        const res = await fetch(r.url);
+        return res.ok ? parseGpxLineStrings(await res.text()) : [];
+      } catch {
+        return [];
+      }
+    })
+  );
+  setSiteTracks(perFile.flat());
 }
 
 async function api(path, options) {
@@ -917,6 +1019,7 @@ function showListView() {
   siteDetailView.hidden = true;
   siteForm.hidden = true;
   airspaceListView.hidden = true;
+  setSiteTracks([]);
 }
 
 function showDetail(id) {
@@ -928,8 +1031,11 @@ function showDetail(id) {
   airspaceListView.hidden = true;
   siteDetailView.hidden = false;
   expandPanel();
+  setSiteTracks([]);
+  loadSiteTracks(site);
 
   const photos = (site.references || []).filter((r) => r.type === "photo");
+  const files = (site.references || []).filter((r) => r.type === "pdf" || r.type === "gpx");
   siteDetailContent.innerHTML = `
     <h3>${escapeHtml(site.name)}</h3>
     <div class="site-area">${escapeHtml(site.area || "")}</div>
@@ -944,9 +1050,8 @@ function showDetail(id) {
     <div class="section-label">Hazards</div>
     <div class="rich">${site.hazards || ""}</div>
 
-    <div class="section-label">Photos</div>
-    <div class="media-grid" id="mediaGrid"></div>
-    <input type="file" id="mediaInput" accept="image/*" style="margin-top:6px" />
+    ${photos.length ? `<div class="section-label">Photos</div><div class="media-grid">${photos.map(mediaThumbHtml).join("")}</div>` : ""}
+    ${files.length ? `<div class="section-label">Files</div><div class="media-file-list">${files.map(mediaFileRowHtml).join("")}</div>` : ""}
 
     <div class="buttons">
       <button id="flyHereBtn">Fly here</button>
@@ -956,45 +1061,6 @@ function showDetail(id) {
       <button id="deleteSiteBtn">Delete site</button>
     </div>
   `;
-
-  const mediaGrid = document.getElementById("mediaGrid");
-  mediaGrid.innerHTML = photos
-    .map(
-      (r) => `
-        <div class="media-thumb" data-filename="${escapeHtml(r.url.split("/").pop())}">
-          <img src="${escapeHtml(r.url)}" alt="${escapeHtml(r.title || "")}" />
-          <button class="media-remove" title="Remove photo">&times;</button>
-        </div>`
-    )
-    .join("");
-  mediaGrid.querySelectorAll(".media-remove").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const filename = btn.parentElement.dataset.filename;
-      const updated = await api(`/api/sites/${site.id}/media/${encodeURIComponent(filename)}`, { method: "DELETE" });
-      sites = sites.map((s) => (s.id === site.id ? updated : s));
-      showDetail(site.id);
-    });
-  });
-
-  document.getElementById("mediaInput").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const dataBase64 = dataUrl.split(",")[1];
-    const updated = await api(`/api/sites/${site.id}/media`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: file.name, dataBase64 }),
-    });
-    sites = sites.map((s) => (s.id === site.id ? updated : s));
-    showDetail(site.id);
-  });
 
   document.getElementById("flyHereBtn").addEventListener("click", () => flyToSite(site));
   document.getElementById("editSiteBtn").addEventListener("click", () => showForm(site));
@@ -1035,6 +1101,9 @@ function showForm(site) {
   document.getElementById("fLongitude").value = site?.longitude ?? "";
   document.getElementById("fElevation").value = site?.elevation_m ?? "";
 
+  formSite = site || null;
+  renderMediaList();
+
   formView = site
     ? {
         latitude: site.view_latitude ?? site.latitude,
@@ -1052,6 +1121,89 @@ function showForm(site) {
       };
   updateViewSummary();
 }
+
+function mediaTypeFromFilename(filename) {
+  switch ((filename.split(".").pop() || "").toLowerCase()) {
+    case "png": case "jpg": case "jpeg": case "gif": return "photo";
+    case "pdf": return "pdf";
+    case "gpx": return "gpx";
+    default: return null;
+  }
+}
+
+// Editable media list for the form in progress: each row shows a thumbnail
+// (photos) or kind label (PDF/GPX), a filename, and a description input
+// that saves on blur/change -- disabled until the site has been saved at
+// least once, since a photo/file needs a site id to upload under.
+function renderMediaList() {
+  const media = formSite ? (formSite.references || []).filter((r) => r.type === "photo" || r.type === "pdf" || r.type === "gpx") : [];
+  mediaList.innerHTML = media
+    .map((r) => {
+      const filename = r.url.split("/").pop();
+      const thumb = r.type === "photo"
+        ? `<img src="${escapeHtml(r.url)}" alt="" />`
+        : mediaKindLabel(r.type);
+      return `
+        <div class="media-row" data-filename="${escapeHtml(filename)}">
+          <div class="media-row-thumb">${thumb}</div>
+          <div class="media-row-body">
+            <div class="media-row-title">${escapeHtml(r.title || filename)}</div>
+            <input type="text" class="media-desc-input" placeholder="Description..." value="${escapeHtml(r.description || "")}" />
+          </div>
+          <button type="button" class="media-row-remove" title="Remove">&times;</button>
+        </div>`;
+    })
+    .join("");
+  mediaHint.hidden = !!formSite;
+  mediaInput.disabled = !formSite;
+}
+
+mediaInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || !formSite) return;
+  if (!mediaTypeFromFilename(file.name)) {
+    alert("Unsupported file type. Use PNG, JPG, PDF, or GPX.");
+    return;
+  }
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const dataBase64 = dataUrl.split(",")[1];
+  const updated = await api(`/api/sites/${formSite.id}/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, dataBase64, description: "" }),
+  });
+  formSite = updated;
+  sites = sites.map((s) => (s.id === updated.id ? updated : s));
+  renderMediaList();
+});
+
+mediaList.addEventListener("change", async (e) => {
+  if (!e.target.matches(".media-desc-input") || !formSite) return;
+  const filename = e.target.closest(".media-row").dataset.filename;
+  const updated = await api(`/api/sites/${formSite.id}/media/${encodeURIComponent(filename)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description: e.target.value }),
+  });
+  formSite = updated;
+  sites = sites.map((s) => (s.id === updated.id ? updated : s));
+});
+
+mediaList.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".media-row-remove");
+  if (!btn || !formSite) return;
+  const filename = btn.closest(".media-row").dataset.filename;
+  const updated = await api(`/api/sites/${formSite.id}/media/${encodeURIComponent(filename)}`, { method: "DELETE" });
+  formSite = updated;
+  sites = sites.map((s) => (s.id === updated.id ? updated : s));
+  renderMediaList();
+});
 
 document.getElementById("useCurrentViewBtn").addEventListener("click", () => {
   formView = {

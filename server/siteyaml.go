@@ -15,9 +15,10 @@ import (
 // PowerShell prototype (_serve.ps1) that this server replaces.
 
 type Reference struct {
-	Type  string `json:"type"`
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
 }
 
 type Site struct {
@@ -166,6 +167,8 @@ func setRefField(r *Reference, key, val string) {
 		r.Type = val
 	case "title":
 		r.Title = val
+	case "description":
+		r.Description = val
 	case "url":
 		r.URL = val
 	}
@@ -250,6 +253,9 @@ func writeSiteYaml(site Site, path string) error {
 		for _, r := range site.References {
 			b.WriteString("    - type: " + yamlScalar(r.Type) + "\n")
 			b.WriteString("      title: " + yamlScalar(r.Title) + "\n")
+			if r.Description != "" {
+				b.WriteString("      description: " + yamlScalar(r.Description) + "\n")
+			}
 			b.WriteString("      url: " + yamlScalar(r.URL) + "\n")
 		}
 	}
