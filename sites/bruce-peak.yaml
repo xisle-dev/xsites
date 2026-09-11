@@ -1,6 +1,6 @@
 name: Bruce Peak
 area: Gulf Islands
-description: <p>Really pretty reliable lift.  Contact a local.  Loads of hazards.  Needs a CYA Activated with Victoria tower.</p>
+description: <p>Really pretty reliable lift. Contact a local. Loads of hazards. Needs a CYA Activated with Victoria tower.</p>
 hazards: <p><br></p>
 latitude: 48.767109
 longitude: -123.507099
@@ -10,3 +10,7 @@ view_longitude: -123.513587
 view_zoom: 13.45
 view_bearing: -118.9
 view_pitch: 70.5
+references:
+    - type: pdf
+      title: trip-itinerary.pdf
+      url: /media/bruce-peak/trip-itinerary.pdf

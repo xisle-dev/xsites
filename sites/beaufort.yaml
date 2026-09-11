@@ -5,15 +5,15 @@ hazards: <p><br></p>
 latitude: 49.341716
 longitude: -124.842162
 elevation_m: 1239
-view_latitude: 49.37029
-view_longitude: -124.91591
-view_zoom: 12.01
-view_bearing: 26.4
-view_pitch: 69
+view_latitude: 49.344972884393684
+view_longitude: -124.86755189662817
+view_zoom: 12.059339280377417
+view_bearing: 26.399999999999974
+view_pitch: 60
 references:
     - type: photo
       title: 4play.jpg
       url: /media/beaufort/4play.jpg
     - type: photo
-      title: 4play.jpg
-      url: /media/beaufort/4play.jpg
+      title: dns.png
+      url: /media/beaufort/dns.png
