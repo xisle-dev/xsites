@@ -327,7 +327,7 @@ html, body {
 .list-filters {
   display: flex;
   gap: 6px;
-  margin: 0 16px 8px;
+  margin: 0 0 12px;
 }
 
 #siteSearch {

@@ -9,7 +9,7 @@
   <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
        (e.g. to the current unix time) whenever either file changes, since a
        plain reload isn't reliably enough to pick up a new version. -->
-  <link rel="stylesheet" href="style.css?v=1789099112" />
+  <link rel="stylesheet" href="style.css?v=1789152824" />
   <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"></script>
 </head>
 <body>
@@ -30,6 +30,13 @@
         <div id="mapControlsMenu" class="map-controls-menu">
           <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
           <div id="terrainContent" class="terrain-content" hidden>
+            <div class="list-filters">
+              <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
+              <select id="areaFilter">
+                <option value="">All areas</option>
+              </select>
+            </div>
+
             <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
             <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
 
@@ -61,12 +68,6 @@
     <div id="sitesListView">
       <div class="sites-header">
         <h2>Sites</h2>
-      </div>
-      <div class="list-filters">
-        <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
-        <select id="areaFilter">
-          <option value="">All areas</option>
-        </select>
       </div>
       <div id="siteList"></div>
     </div>
