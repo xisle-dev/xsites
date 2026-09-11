@@ -693,7 +693,21 @@ async function loadSites() {
   renderMarkers();
   renderSiteList();
   fitToVisibleSites();
+  updateMarkerLabelVisibility();
 }
+
+// Below this zoom, the whole-island overview has 60+ sites packed close
+// enough that every marker showing its name at once is unreadable clutter
+// (and some of those sites sit right next to lakes/inlets, so overlapping
+// labels there read as scrambled). Hide labels until there's zoomed-in
+// room for them, same as how place-name labels progressively appear on
+// the basemap itself.
+const MARKER_LABEL_MIN_ZOOM = 9;
+
+function updateMarkerLabelVisibility() {
+  document.getElementById("map").classList.toggle("hide-marker-labels", map.getZoom() < MARKER_LABEL_MIN_ZOOM);
+}
+map.on("zoom", updateMarkerLabelVisibility);
 
 function getFilteredSites() {
   const q = siteSearch.value.trim().toLowerCase();

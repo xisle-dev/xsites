@@ -722,6 +722,10 @@ html, body {
   transform: translate(-50%, -50%) rotate(45deg);
 }
 
+#map.hide-marker-labels .site-marker-label {
+  display: none;
+}
+
 .site-marker-label {
   position: absolute;
   left: 32px;
