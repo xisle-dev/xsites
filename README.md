@@ -48,7 +48,10 @@ format but nothing at runtime:
   OpenAIP (CC BY-NC 4.0, ultimately sourced from NAV CANADA's Designated
   Airspace Handbook), pre-filtered to the Vancouver Island flying area by
   `tools/fetchairspace` and checked into the repo as `data/airspace.geojson`.
-  Rendered as flat 2D fill + line layers by default; a separate
+  Off by default (most visits never need it), and `data/airspace.geojson`
+  itself isn't even fetched until the "Show airspace" checkbox is first
+  ticked — its GeoJSON source starts out empty and is populated on demand.
+  Once on, rendered as flat 2D fill + line layers; a separate
   `airspace-highlight` GeoJSON source drives the selected/pinned entry's
   outline, on-map label, and a `fill-extrusion` layer that extrudes just
   that one shape into its true floor-to-ceiling 3D volume (terrain-corrected
@@ -56,6 +59,21 @@ format but nothing at runtime:
   render as an unusable wall). Clicking an airspace list entry pins its
   highlight so it survives panning/rotating; a fresh click query clears the
   old pin and auto-pins its own top (lowest-ceiling) entry.
+- **Site markers**: each pin carries a small text label (the site's name) as
+  a *second*, independent MapLibre `Marker` anchored to the same coordinate
+  (`anchor: "left"` with a fixed offset) rather than baked into the pin's own
+  element — an earlier version built the label as a child of the pin's DOM
+  element with hand-rolled absolute positioning, which broke pin placement
+  in at least one real browser despite checking out fine in testing here;
+  a second independent marker relies entirely on MapLibre's own anchor/offset
+  math instead.
+- **Initial camera**: both apps fetch the site list *before* constructing
+  the `Map`, and pass the bounding box of every site straight in as the
+  map's initial `bounds`. Fetching sites only after the map's first `load`
+  event (the original approach) meant starting at a fixed, tight view and
+  then jumping to the fitted-to-all-sites view a moment later once the
+  fetch resolved — visibly a second, differently-zoomed set of
+  terrain/satellite tiles loading right after the first.
 - **Responsive UI**: a fixed left-side panel on desktop; below a CSS
   breakpoint it becomes a draggable bottom sheet, with map controls
   (zoom, pitch, terrain exaggeration, airspace legend) moved into a
@@ -200,3 +218,9 @@ https://maps.protomaps.com/builds/.
 - `sites/*.yaml` is a small hand-rolled flat-scalar YAML format (see
   `server/siteyaml.go`), not general YAML — it round-trips exactly what's
   already in this repo, but wasn't built to handle arbitrary YAML.
+- `index.html`/`static/index.html` load `app.js`/`style.css` with a
+  `?v=<unix time>` query string. Browsers were observed holding onto a
+  stale cached copy of one and not the other across edits (mismatched
+  JS/CSS versions), badly enough that even a manual hard refresh didn't
+  reliably fix it. Bump both `?v=` values (e.g. to the current unix time)
+  whenever `app.js` or `style.css` changes.
