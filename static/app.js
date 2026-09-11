@@ -732,12 +732,18 @@ function renderMarkers() {
   for (const site of getFilteredSites()) {
     if (typeof site.latitude !== "number" || typeof site.longitude !== "number") continue;
     const el = document.createElement("div");
-    el.className = "site-marker";
+    el.className = "site-marker-wrap";
     el.title = site.name;
     el.addEventListener("click", (e) => {
       e.stopPropagation();
       showDetail(site.id);
     });
+    const pin = document.createElement("div");
+    pin.className = "site-marker";
+    const label = document.createElement("div");
+    label.className = "site-marker-label";
+    label.textContent = site.name;
+    el.append(pin, label);
     const marker = new Marker({ element: el, anchor: "bottom" })
       .setLngLat([site.longitude, site.latitude])
       .addTo(map);
