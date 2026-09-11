@@ -228,8 +228,10 @@ const style = {
     },
     [AIRSPACE_SOURCE_ID]: {
       type: "geojson",
-      // Absolute for the same reason as LABELS_SOURCE_ID above.
-      data: `${window.location.origin}/data/airspace.geojson`,
+      // Empty until the airspace checkbox is actually ticked (see
+      // ensureAirspaceDataLoaded) -- most visits never turn this on, so
+      // there's no reason to fetch and parse it on every page load.
+      data: { type: "FeatureCollection", features: [] },
       attribution: '© <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors (CC BY-NC 4.0)',
     },
     [AIRSPACE_HIGHLIGHT_SOURCE_ID]: {
@@ -478,11 +480,29 @@ function applyAirspaceFilter() {
   map.setFilter(AIRSPACE_LINE_LAYER_ID, filter);
 }
 
+let airspaceDataRequested = false;
+
+// Fetches the airspace geojson into its (initially empty) source the first
+// time it's actually needed, instead of every page load regardless of
+// whether the checkbox ever gets ticked.
+function ensureAirspaceDataLoaded() {
+  if (airspaceDataRequested) return;
+  airspaceDataRequested = true;
+  fetch(`${window.location.origin}/data/airspace.geojson`)
+    .then((res) => res.json())
+    .then((geojson) => map.getSource(AIRSPACE_SOURCE_ID)?.setData(geojson))
+    .catch((err) => {
+      airspaceDataRequested = false;
+      console.error("[airspace] failed to load data/airspace.geojson:", err);
+    });
+}
+
 function applyAirspaceVisibility() {
   const visibility = airspaceToggle.checked ? "visible" : "none";
   map.setLayoutProperty(AIRSPACE_FILL_LAYER_ID, "visibility", visibility);
   map.setLayoutProperty(AIRSPACE_LINE_LAYER_ID, "visibility", visibility);
   airspaceLegend.classList.toggle("airspace-legend-disabled", !airspaceToggle.checked);
+  if (airspaceToggle.checked) ensureAirspaceDataLoaded();
 }
 
 map.on("load", () => {
