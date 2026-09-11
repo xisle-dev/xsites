@@ -7,7 +7,10 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.snow.css" />
-  <link rel="stylesheet" href="style.css" />
+  <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
+       (e.g. to the current unix time) whenever either file changes, since a
+       plain reload isn't reliably enough to pick up a new version. -->
+  <link rel="stylesheet" href="style.css?v=1789097736" />
 </head>
 <body>
   <div id="map"></div>
@@ -130,6 +133,6 @@
   <div id="placingBanner" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=1789097736"></script>
 </body>
 </html>

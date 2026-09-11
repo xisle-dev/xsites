@@ -757,21 +757,7 @@ async function loadSites() {
   renderMarkers();
   renderSiteList();
   fitToVisibleSites();
-  updateMarkerLabelVisibility();
 }
-
-// Below this zoom, the whole-island overview has 60+ sites packed close
-// enough that every marker showing its name at once is unreadable clutter
-// (and some of those sites sit right next to lakes/inlets, so overlapping
-// labels there read as scrambled). Hide labels until there's zoomed-in
-// room for them, same as how place-name labels progressively appear on
-// the basemap itself.
-const MARKER_LABEL_MIN_ZOOM = 9;
-
-function updateMarkerLabelVisibility() {
-  document.getElementById("map").classList.toggle("hide-marker-labels", map.getZoom() < MARKER_LABEL_MIN_ZOOM);
-}
-map.on("zoom", updateMarkerLabelVisibility);
 
 // The search box and area dropdown together define "visible": both the
 // marker set on the map and the sidebar list are this same set, so they
@@ -819,18 +805,12 @@ function renderMarkers() {
   for (const site of getFilteredSites()) {
     if (typeof site.latitude !== "number" || typeof site.longitude !== "number") continue;
     const el = document.createElement("div");
-    el.className = "site-marker-wrap";
+    el.className = "site-marker";
     el.title = site.name;
     el.addEventListener("click", (e) => {
       e.stopPropagation();
       showDetail(site.id);
     });
-    const pin = document.createElement("div");
-    pin.className = "site-marker";
-    const label = document.createElement("div");
-    label.className = "site-marker-label";
-    label.textContent = site.name;
-    el.append(pin, label);
     const marker = new Marker({ element: el, anchor: "bottom" })
       .setLngLat([site.longitude, site.latitude])
       .addTo(map);

@@ -694,13 +694,6 @@ html, body {
   color: #7fb3ff;
 }
 
-.site-marker-wrap {
-  position: relative;
-  width: 26px;
-  height: 26px;
-  cursor: pointer;
-}
-
 .site-marker {
   width: 26px;
   height: 26px;
@@ -708,6 +701,7 @@ html, body {
   background: #ff5a3c;
   border: 2px solid #14161a;
   transform: rotate(-45deg);
+  cursor: pointer;
 }
 
 .site-marker::after {
@@ -720,23 +714,4 @@ html, body {
   background: #14161a;
   border-radius: 50%;
   transform: translate(-50%, -50%) rotate(45deg);
-}
-
-#map.hide-marker-labels .site-marker-label {
-  display: none;
-}
-
-.site-marker-label {
-  position: absolute;
-  left: 32px;
-  top: 3px;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  color: #fff;
-  background: rgba(20, 22, 26, 0.72);
-  padding: 3px 6px;
-  border-radius: 4px;
-  pointer-events: none;
 }
