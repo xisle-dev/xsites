@@ -79,6 +79,43 @@ addProtocol("gtiles", async (params, abortController) => {
 const pmtilesProtocol = new Protocol();
 addProtocol("pmtiles", pmtilesProtocol.tile);
 
+// Fetched up front, before the map is created, so the initial camera can
+// already be framed around every site. Fetching sites.json only after the
+// map's first "load" (as this used to) meant starting at a fixed, tight
+// view, then jumping to the fitted-to-all-sites view a moment later once
+// the fetch resolved -- visibly a second, differently-zoomed set of
+// terrain/satellite tiles loading right after the first.
+let sites = [];
+try {
+  const res = await fetch("sites.json");
+  sites = await res.json();
+} catch (err) {
+  console.error("[sites] failed to load sites.json:", err);
+}
+
+// Bounding box (10% buffer, floored so a single site or a tight cluster
+// still gets sensible context) around the given sites' coordinates -- used
+// both for the initial camera above and whenever the visible set changes
+// (search/area filter, see fitToVisibleSites).
+function boundsForSites(list) {
+  const pinned = list.filter((s) => typeof s.latitude === "number" && typeof s.longitude === "number");
+  if (pinned.length === 0) return null;
+  const lats = pinned.map((s) => s.latitude);
+  const lngs = pinned.map((s) => s.longitude);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const latBuffer = Math.max((maxLat - minLat) * 0.1, 0.01);
+  const lngBuffer = Math.max((maxLng - minLng) * 0.1, 0.01);
+  return [
+    [minLng - lngBuffer, minLat - latBuffer],
+    [maxLng + lngBuffer, maxLat + latBuffer],
+  ];
+}
+
+const START_BOUNDS = boundsForSites(sites);
+// Fallback center/zoom if sites.json failed to load or was empty.
 const START = {
   center: [-126.155, 49.365],
   zoom: 12,
@@ -309,8 +346,7 @@ const style = {
 const map = new Map({
   container: "map",
   style,
-  center: START.center,
-  zoom: START.zoom,
+  ...(START_BOUNDS ? { bounds: START_BOUNDS } : { center: START.center, zoom: START.zoom }),
   pitch: START.pitch,
   bearing: START.bearing,
   attributionControl: false,
@@ -689,9 +725,9 @@ map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
 map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
 map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
 
-// --- Sites: read-only, from the baked-in sites.json ---
+// --- Sites: read-only, from the baked-in sites.json (already fetched
+// above, before the map was created) ---
 
-let sites = [];
 const markersById = {};
 const labelMarkersById = {};
 
@@ -708,13 +744,10 @@ function escapeHtml(s) {
   ));
 }
 
-async function loadSites() {
-  const res = await fetch("sites.json");
-  sites = await res.json();
+function initSitesUI() {
   populateAreaFilter();
   renderMarkers();
   renderSiteList();
-  fitToVisibleSites();
 }
 
 function getFilteredSites() {
@@ -726,26 +759,8 @@ function getFilteredSites() {
 }
 
 function fitToVisibleSites() {
-  const pinned = getFilteredSites().filter((s) => typeof s.latitude === "number" && typeof s.longitude === "number");
-  if (pinned.length === 0) return;
-
-  const lats = pinned.map((s) => s.latitude);
-  const lngs = pinned.map((s) => s.longitude);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-
-  const latBuffer = Math.max((maxLat - minLat) * 0.1, 0.01);
-  const lngBuffer = Math.max((maxLng - minLng) * 0.1, 0.01);
-
-  map.fitBounds(
-    [
-      [minLng - lngBuffer, minLat - latBuffer],
-      [maxLng + lngBuffer, maxLat + latBuffer],
-    ],
-    { duration: 0 }
-  );
+  const bounds = boundsForSites(getFilteredSites());
+  if (bounds) map.fitBounds(bounds, { duration: 0 });
 }
 
 function renderMarkers() {
@@ -872,4 +887,4 @@ function showDetail(id) {
 
 document.getElementById("backToListBtn").addEventListener("click", showListView);
 
-map.on("load", loadSites);
+map.on("load", initSitesUI);

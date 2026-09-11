@@ -66,6 +66,44 @@ addProtocol("gtiles", async (params, abortController) => {
   return { data };
 });
 
+// Fetched up front, before the map is created, so the initial camera can
+// already be framed around every site. Fetching /api/sites only after the
+// map's first "load" (as this used to) meant starting at a fixed, tight
+// view, then jumping to the fitted-to-all-sites view a moment later once
+// the fetch resolved -- visibly a second, differently-zoomed set of
+// terrain/satellite tiles loading right after the first.
+let sites = [];
+try {
+  const res = await fetch("/api/sites");
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  sites = await res.json();
+} catch (err) {
+  console.error("[sites] failed to load /api/sites:", err);
+}
+
+// Bounding box (10% buffer, floored so a single site or a tight cluster
+// still gets sensible context) around the given sites' coordinates -- used
+// both for the initial camera above and whenever the visible set changes
+// (search/area filter, see fitToVisibleSites).
+function boundsForSites(list) {
+  const pinned = list.filter((s) => typeof s.latitude === "number" && typeof s.longitude === "number");
+  if (pinned.length === 0) return null;
+  const lats = pinned.map((s) => s.latitude);
+  const lngs = pinned.map((s) => s.longitude);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const latBuffer = Math.max((maxLat - minLat) * 0.1, 0.01);
+  const lngBuffer = Math.max((maxLng - minLng) * 0.1, 0.01);
+  return [
+    [minLng - lngBuffer, minLat - latBuffer],
+    [maxLng + lngBuffer, maxLat + latBuffer],
+  ];
+}
+
+const START_BOUNDS = boundsForSites(sites);
+// Fallback center/zoom if /api/sites failed to load or was empty.
 const START = {
   center: [-126.155, 49.365],
   zoom: 12,
@@ -329,8 +367,7 @@ const style = {
 const map = new Map({
   container: "map",
   style,
-  center: START.center,
-  zoom: START.zoom,
+  ...(START_BOUNDS ? { bounds: START_BOUNDS } : { center: START.center, zoom: START.zoom }),
   pitch: START.pitch,
   bearing: START.bearing,
   attributionControl: false,
@@ -716,9 +753,9 @@ map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
 map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
 map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
 
-// --- Sites: markers + CRUD against the local /api/sites backend ---
+// --- Sites: markers + CRUD against the local /api/sites backend (data
+// already fetched above, before the map was created) ---
 
-let sites = [];
 const markersById = {};
 const labelMarkersById = {};
 // null while inactive; "new" while placing a brand-new site (from the list's
@@ -772,12 +809,10 @@ async function api(path, options) {
   return res.status === 204 ? null : res.json();
 }
 
-async function loadSites() {
-  sites = await api("/api/sites");
+function initSitesUI() {
   populateAreaFilter();
   renderMarkers();
   renderSiteList();
-  fitToVisibleSites();
 }
 
 // The search box and area dropdown together define "visible": both the
@@ -795,29 +830,8 @@ function getFilteredSites() {
 // buffer on each side, so the visible set is framed without markers sitting
 // right at the viewport edge.
 function fitToVisibleSites() {
-  const pinned = getFilteredSites().filter((s) => typeof s.latitude === "number" && typeof s.longitude === "number");
-  if (pinned.length === 0) return;
-
-  const lats = pinned.map((s) => s.latitude);
-  const lngs = pinned.map((s) => s.longitude);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-
-  // 10% of the span, with a floor so a single pin (or a cluster of
-  // near-identical coordinates) still gets a sensible amount of context
-  // around it instead of an essentially zero-size bounds.
-  const latBuffer = Math.max((maxLat - minLat) * 0.1, 0.01);
-  const lngBuffer = Math.max((maxLng - minLng) * 0.1, 0.01);
-
-  map.fitBounds(
-    [
-      [minLng - lngBuffer, minLat - latBuffer],
-      [maxLng + lngBuffer, maxLat + latBuffer],
-    ],
-    { duration: 0 }
-  );
+  const bounds = boundsForSites(getFilteredSites());
+  if (bounds) map.fitBounds(bounds, { duration: 0 });
 }
 
 function renderMarkers() {
@@ -1149,4 +1163,4 @@ map.on("click", (e) => {
   document.getElementById("fLongitude").value = e.lngLat.lng.toFixed(6);
 });
 
-map.on("load", loadSites);
+map.on("load", initSitesUI);
