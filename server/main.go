@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"log"
 	"mime"
@@ -20,10 +21,17 @@ import (
 
 var sitesDir string
 
+// store backs the read path only (GET /api/sites, GET /api/sites/{id}) --
+// see store.go. Every write handler below still goes straight at sitesDir
+// on the local filesystem; that moves behind this same abstraction in
+// Phase 4 (issue #5).
+var store SiteStore
+
 func main() {
 	port := flag.String("port", "8933", "HTTP port")
 	host := flag.String("host", "127.0.0.1", "Bind address (use 0.0.0.0 to accept connections from outside localhost, e.g. from other containers)")
 	root := flag.String("root", ".", "Project root to serve static files from")
+	storeKind := flag.String("store", "local", "Where GET /api/sites reads from: \"local\" (sites/*.yaml under -root) or \"r2\" (see README for required R2_* environment variables)")
 	flag.Parse()
 
 	absRoot, err := filepath.Abs(*root)
@@ -31,6 +39,19 @@ func main() {
 		log.Fatalf("resolving root: %v", err)
 	}
 	sitesDir = filepath.Join(absRoot, "sites")
+
+	switch *storeKind {
+	case "local":
+		store = newLocalSiteStore(sitesDir)
+	case "r2":
+		cfg, err := r2ConfigFromEnv()
+		if err != nil {
+			log.Fatalf("configuring -store=r2: %v", err)
+		}
+		store = newR2SiteStore(cfg)
+	default:
+		log.Fatalf("unknown -store %q (want \"local\" or \"r2\")", *storeKind)
+	}
 
 	for ext, ct := range map[string]string{
 		".html": "text/html; charset=utf-8",
@@ -92,7 +113,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func siteYamlPath(id string) string {
-	return filepath.Join(sitesDir, id+".yaml")
+	return siteYamlPathIn(sitesDir, id)
+}
+
+func siteYamlPathIn(dir, id string) string {
+	return filepath.Join(dir, id+".yaml")
 }
 
 func siteExists(id string) bool {
@@ -101,7 +126,7 @@ func siteExists(id string) bool {
 }
 
 func handleListSites(w http.ResponseWriter, r *http.Request) {
-	sites, err := getAllSites(sitesDir)
+	sites, err := store.GetAllSites(r.Context())
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -112,12 +137,12 @@ func handleListSites(w http.ResponseWriter, r *http.Request) {
 
 func handleGetSite(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !siteExists(id) {
-		writeError(w, 404, "not found")
-		return
-	}
-	site, err := readSiteYaml(siteYamlPath(id), id)
+	site, err := store.GetSite(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, ErrSiteNotFound) {
+			writeError(w, 404, "not found")
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

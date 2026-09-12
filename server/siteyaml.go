@@ -115,6 +115,14 @@ func readSiteYaml(path, id string) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
+	return parseSiteYaml(data, id), nil
+}
+
+// parseSiteYaml is the read side of readSiteYaml split out from the local
+// file read, so a SiteStore backed by something other than the local
+// filesystem (see store.go) can parse the same bytes without duplicating
+// this line-oriented reader.
+func parseSiteYaml(data []byte, id string) Site {
 	site := Site{ID: id, References: []Reference{}}
 	lines := strings.Split(string(data), "\n")
 
@@ -158,7 +166,7 @@ func readSiteYaml(path, id string) (Site, error) {
 		}
 	}
 	flush()
-	return site, nil
+	return site
 }
 
 func setRefField(r *Reference, key, val string) {

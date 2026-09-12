@@ -10,3 +10,12 @@ tiles/*.log
 # Static site build output (tools/buildstatic) -- generated, deployed to R2
 # by CI, not committed.
 dist/
+
+# Local-only credentials for testing -store=r2 against the live-data bucket
+# (see server/store.go) -- never committed, GitHub Actions gets these as
+# repo secrets instead.
+server/.r2.local.env
+
+# Wrangler's local cache (account info, OAuth state) from running it in this
+# directory -- machine-local, not project state.
+.wrangler/
