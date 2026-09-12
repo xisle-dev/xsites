@@ -102,14 +102,67 @@ function boundsForSites(list) {
   ];
 }
 
-const START_BOUNDS = boundsForSites(sites);
-// Fallback center/zoom if /api/sites failed to load or was empty.
-const START = {
-  center: [-126.155, 49.365],
-  zoom: 12,
-  pitch: 0,
-  bearing: 0,
-};
+// A saved/shared link can specify either a site (?site=<id>, framed the same
+// way clicking it in the list would) or a raw camera position (?lng=&lat=&
+// zoom=&bearing=&pitch=, written by updateUrl whenever the map moves with no
+// site selected) -- either way, resolved before the map is constructed so
+// the very first frame is already the right one instead of the default
+// fit-to-all-sites view flashing past first.
+const urlParams = new URLSearchParams(location.search);
+const urlSite = urlParams.has("site") ? sites.find((s) => s.id === urlParams.get("site")) : null;
+const urlHasCamera = urlParams.has("lng") && urlParams.has("lat");
+
+const START_BOUNDS = urlSite || urlHasCamera ? null : boundsForSites(sites);
+// Fallback center/zoom if /api/sites failed to load or was empty, and
+// neither a site nor a camera position came in on the URL.
+const START = urlSite
+  ? {
+      center: [urlSite.view_longitude ?? urlSite.longitude, urlSite.view_latitude ?? urlSite.latitude],
+      zoom: urlSite.view_zoom ?? 13,
+      bearing: urlSite.view_bearing ?? 0,
+      pitch: urlSite.view_pitch ?? 0,
+    }
+  : urlHasCamera
+    ? {
+        center: [parseFloat(urlParams.get("lng")), parseFloat(urlParams.get("lat"))],
+        zoom: parseFloat(urlParams.get("zoom") ?? "12"),
+        bearing: parseFloat(urlParams.get("bearing") ?? "0"),
+        pitch: parseFloat(urlParams.get("pitch") ?? "0"),
+      }
+    : {
+        center: [-126.155, 49.365],
+        zoom: 12,
+        pitch: 0,
+        bearing: 0,
+      };
+
+// Mirrors the current site (or, with none open, the raw camera position),
+// search text, area filter, and airspace toggle into the URL's query string
+// via history.replaceState -- called continuously (site selection, filter
+// changes, the airspace checkbox, every map moveend) rather than only from
+// one specific action, so the address bar is always an accurate "get back
+// to exactly this" link, bookmarkable or shareable at any moment without
+// the user having to do anything special first.
+function updateUrl() {
+  const params = new URLSearchParams();
+  if (selectedSiteId) {
+    params.set("site", selectedSiteId);
+  } else {
+    const center = map.getCenter();
+    params.set("lng", center.lng.toFixed(5));
+    params.set("lat", center.lat.toFixed(5));
+    params.set("zoom", map.getZoom().toFixed(2));
+    const bearing = map.getBearing();
+    const pitch = map.getPitch();
+    if (bearing) params.set("bearing", bearing.toFixed(1));
+    if (pitch) params.set("pitch", pitch.toFixed(1));
+  }
+  if (siteSearch.value.trim()) params.set("q", siteSearch.value.trim());
+  if (areaFilter.value) params.set("area", areaFilter.value);
+  if (airspaceToggle.checked) params.set("airspace", "1");
+  const qs = params.toString();
+  history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+}
 
 // MapLibre warns (and renders worse) if one raster-dem source is used both
 // for a hillshade layer AND for setTerrain() at the same time — use two
@@ -429,6 +482,11 @@ const map = new Map({
 
 window.map = map;
 
+// Keeps the URL's camera params current whenever the user pans/zooms/tilts
+// freely (updateUrl itself skips this in favor of ?site= while a site is
+// open -- see selectedSiteId).
+map.on("moveend", updateUrl);
+
 map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
 document.getElementById("zoomInBtn").addEventListener("click", () => map.zoomIn({ duration: 200 }));
@@ -597,6 +655,7 @@ function applyAirspaceVisibility() {
     ensureAirspaceDataLoaded();
     clearGlideRange(); // the two overlays would just fight for the same pixels
   }
+  updateUrl();
 }
 
 map.on("load", () => {
@@ -1268,6 +1327,7 @@ const labelMarkersById = {};
 // pin of whichever form (add or edit) is currently open.
 let placingMode = null;
 let editingId = null; // null while adding a new site
+let selectedSiteId = null; // the site currently open in the read-only detail view, if any -- drives the ?site= URL param
 let formView = null; // {latitude, longitude, zoom, bearing, pitch} camera preset for the form in progress
 let formSite = null; // site object backing the open form's media list; null until the site exists (saved at least once)
 
@@ -1389,12 +1449,6 @@ async function api(path, options) {
   return res.status === 204 ? null : res.json();
 }
 
-function initSitesUI() {
-  populateAreaFilter();
-  renderMarkers();
-  renderSiteList();
-}
-
 // The search box and area dropdown together define "visible": both the
 // marker set on the map and the sidebar list are this same set, so they
 // never disagree about what's currently shown.
@@ -1484,6 +1538,7 @@ function applyFilters() {
   renderMarkers();
   renderSiteList();
   fitToVisibleSites();
+  updateUrl();
 }
 siteSearch.addEventListener("input", applyFilters);
 areaFilter.addEventListener("change", applyFilters);
@@ -1505,12 +1560,15 @@ function showListView() {
   siteForm.hidden = true;
   airspaceListView.hidden = true;
   setSiteTracks([]);
+  selectedSiteId = null;
+  updateUrl();
 }
 
 function showDetail(id) {
   stopPlacing();
   const site = sites.find((s) => s.id === id);
   if (!site) return;
+  selectedSiteId = id;
   sitesListView.hidden = true;
   siteForm.hidden = true;
   airspaceListView.hidden = true;
@@ -1560,6 +1618,7 @@ function showDetail(id) {
   });
 
   flyToSite(site);
+  updateUrl();
 }
 
 function updateViewSummary() {
@@ -1803,4 +1862,24 @@ map.on("click", (e) => {
   document.getElementById("fLongitude").value = e.lngLat.lng.toFixed(6);
 });
 
-map.on("load", initSitesUI);
+// Applies whatever came in on the URL (see urlParams/urlSite near the top)
+// on top of the normal initial render: search text and area filter need to
+// land before the first renderMarkers/renderSiteList so they're not shown
+// only to immediately re-render a moment later, while the site and airspace
+// state are applied after since they act on top of that already-filtered
+// list. The camera itself was already handled before the map was even
+// constructed (see START), so there's nothing to do for it here.
+function applyInitialUrlState() {
+  populateAreaFilter();
+  if (urlParams.has("q")) siteSearch.value = urlParams.get("q");
+  if (urlParams.has("area")) areaFilter.value = urlParams.get("area");
+  renderMarkers();
+  renderSiteList();
+
+  if (urlParams.get("airspace") === "1") {
+    airspaceToggle.checked = true;
+    applyAirspaceVisibility();
+  }
+  if (urlSite) showDetail(urlSite.id);
+}
+map.on("load", applyInitialUrlState);
