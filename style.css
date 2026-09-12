@@ -192,15 +192,65 @@ html, body {
 .panel-topbar {
   flex: 0 0 auto;
   display: flex;
+  flex-direction: column;
+  padding: 16px 18px 8px;
+}
+
+.panel-topbar-row {
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 18px 8px;
 }
 
 .panel-topbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.topbar-search {
+  position: relative;
+  margin-top: 10px;
+}
+
+.topbar-search input {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid #40454e;
+  background: #1c1f25;
+  color: #f2f2f2;
+  font-size: 12.5px;
+}
+
+.place-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(20, 22, 26, 0.97);
+  border: 1px solid #40454e;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.place-suggestions[hidden] {
+  display: none;
+}
+
+.place-suggestion {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: #f2f2f2;
+  cursor: pointer;
+}
+
+.place-suggestion:hover,
+.place-suggestion.active {
+  background: #2a2e35;
 }
 
 .panel-topbar .zoom-controls {

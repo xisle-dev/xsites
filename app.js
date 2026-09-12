@@ -780,6 +780,118 @@ map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
 map.on("mouseenter", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
 map.on("mouseleave", AIRSPACE_FILL_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
 
+// --- Header place search: Places API (New) autocomplete + place details,
+// reusing the same API key as the gtiles:// satellite session above. This
+// key needs Places API (New) enabled in the Google Cloud project it belongs
+// to -- it's a separate API from the Map Tiles one already in use here. ---
+
+const placeSearchInput = document.getElementById("placeSearch");
+const placeSuggestionsEl = document.getElementById("placeSuggestions");
+
+let placeSearchDebounce = null;
+let placeSearchToken = 0; // discards a stale response if a newer query has since been issued
+let placePredictions = [];
+let placeActiveIndex = -1;
+
+function hidePlaceSuggestions() {
+  placeSuggestionsEl.hidden = true;
+  placeSuggestionsEl.innerHTML = "";
+  placePredictions = [];
+  placeActiveIndex = -1;
+}
+
+function renderPlaceSuggestions() {
+  placeSuggestionsEl.innerHTML = placePredictions
+    .map((p, i) => `<div class="place-suggestion${i === placeActiveIndex ? " active" : ""}" data-index="${i}">${escapeHtml(p.text?.text || "")}</div>`)
+    .join("");
+  placeSuggestionsEl.hidden = placePredictions.length === 0;
+  placeSuggestionsEl.querySelectorAll(".place-suggestion").forEach((el) => {
+    el.addEventListener("click", () => selectPlace(placePredictions[Number(el.dataset.index)]));
+  });
+}
+
+async function runPlaceAutocomplete(query) {
+  const token = ++placeSearchToken;
+  const center = map.getCenter();
+  let suggestions = [];
+  try {
+    const res = await fetch("https://places.googleapis.com/v1/places:autocomplete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY },
+      // Bias (not restrict) toward the current map view -- lets a search
+      // for a place outside Vancouver Island still find its way there.
+      body: JSON.stringify({
+        input: query,
+        // 50,000m is the API's max radius for a circle bias.
+        locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 50000 } },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      suggestions = data.suggestions || [];
+    }
+  } catch {
+    suggestions = [];
+  }
+  if (token !== placeSearchToken) return; // a newer keystroke has already superseded this
+  placePredictions = suggestions.map((s) => s.placePrediction).filter(Boolean);
+  placeActiveIndex = -1;
+  renderPlaceSuggestions();
+}
+
+async function selectPlace(prediction) {
+  if (!prediction) return;
+  placeSearchInput.value = prediction.text?.text || "";
+  hidePlaceSuggestions();
+  try {
+    const res = await fetch(`https://places.googleapis.com/v1/places/${prediction.placeId}?fields=location,viewport`, {
+      headers: { "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY },
+    });
+    if (!res.ok) return;
+    const place = await res.json();
+    if (place.viewport) {
+      const v = place.viewport;
+      map.fitBounds([[v.low.longitude, v.low.latitude], [v.high.longitude, v.high.latitude]], { padding: 40, duration: 1500 });
+    } else if (place.location) {
+      map.flyTo({ center: [place.location.longitude, place.location.latitude], zoom: 13, duration: 1500 });
+    }
+  } catch {
+    // A failed lookup just leaves the map where it was -- nothing to recover.
+  }
+}
+
+placeSearchInput.addEventListener("input", () => {
+  const query = placeSearchInput.value.trim();
+  clearTimeout(placeSearchDebounce);
+  if (!query) {
+    hidePlaceSuggestions();
+    return;
+  }
+  placeSearchDebounce = setTimeout(() => runPlaceAutocomplete(query), 250);
+});
+
+placeSearchInput.addEventListener("keydown", (e) => {
+  if (placePredictions.length === 0) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    placeActiveIndex = (placeActiveIndex + 1) % placePredictions.length;
+    renderPlaceSuggestions();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    placeActiveIndex = (placeActiveIndex - 1 + placePredictions.length) % placePredictions.length;
+    renderPlaceSuggestions();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    selectPlace(placePredictions[placeActiveIndex] ?? placePredictions[0]);
+  } else if (e.key === "Escape") {
+    hidePlaceSuggestions();
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (!placeSuggestionsEl.hidden && !e.target.closest(".topbar-search")) hidePlaceSuggestions();
+});
+
 // --- Sites: markers + CRUD against the local /api/sites backend (data
 // already fetched above, before the map was created) ---
 

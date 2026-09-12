@@ -9,7 +9,7 @@
   <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
        (e.g. to the current unix time) whenever either file changes, since a
        plain reload isn't reliably enough to pick up a new version. -->
-  <link rel="stylesheet" href="style.css?v=1789153707" />
+  <link rel="stylesheet" href="style.css?v=1789175466" />
   <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"></script>
 </head>
 <body>
@@ -18,18 +18,19 @@
   <div id="panel">
     <div id="panelHandle" class="panel-handle" aria-hidden="true"></div>
     <div class="panel-topbar">
-      <div class="brand">
-        <img src="logo.svg" alt="" class="brand-logo" />
-        <h1>X/Sites</h1>
-      </div>
-      <div class="panel-topbar-actions">
-        <div class="zoom-controls">
-          <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
-          <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+      <div class="panel-topbar-row">
+        <div class="brand">
+          <img src="logo.svg" alt="" class="brand-logo" />
+          <h1>X/Sites</h1>
         </div>
-        <div id="mapControlsMenu" class="map-controls-menu">
-          <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
-          <div id="terrainContent" class="terrain-content" hidden>
+        <div class="panel-topbar-actions">
+          <div class="zoom-controls">
+            <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          </div>
+          <div id="mapControlsMenu" class="map-controls-menu">
+            <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
+            <div id="terrainContent" class="terrain-content" hidden>
             <div class="list-filters">
               <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
               <select id="areaFilter">
@@ -63,6 +64,11 @@
           </div>
         </div>
       </div>
+      </div>
+      <div class="topbar-search">
+        <input type="text" id="placeSearch" placeholder="Search places..." autocomplete="off" />
+        <div id="placeSuggestions" class="place-suggestions" hidden></div>
+      </div>
     </div>
 
     <div id="sitesListView">
@@ -88,6 +94,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=1789170839"></script>
+  <script type="module" src="app.js?v=1789175793"></script>
 </body>
 </html>
