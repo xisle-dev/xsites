@@ -849,6 +849,77 @@ html, body {
   color: #7fb3ff;
 }
 
+/* --- Glide range tool --- */
+
+.glide-legend {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 20;
+  background: #14161aee;
+  border: 1px solid #2a2e35;
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 120px;
+}
+
+.glide-legend-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f2f2f2;
+  margin-bottom: 8px;
+}
+
+.glide-legend-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.glide-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #cfd3d9;
+}
+
+.glide-legend .swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.glide-legend button {
+  width: 100%;
+  background: #2a2e35;
+  color: #f2f2f2;
+  border: 1px solid #40454e;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.glide-legend button:hover {
+  background: #383e47;
+}
+
+.glide-hover-tip {
+  position: absolute;
+  z-index: 25;
+  pointer-events: none;
+  background: #14161aee;
+  border: 1px solid #2a2e35;
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f2f2f2;
+}
+
 .site-marker {
   width: 26px;
   height: 26px;
@@ -880,5 +951,5 @@ html, body {
   padding: 3px 6px;
   border-radius: 4px;
   white-space: nowrap;
-  pointer-events: none;
+  cursor: pointer;
 }

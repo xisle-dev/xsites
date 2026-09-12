@@ -138,6 +138,9 @@ const AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID = "airspace-highlight-label";
 const SITE_TRACKS_SOURCE_ID = "site-tracks";
 const SITE_TRACKS_CASING_LAYER_ID = "site-tracks-casing";
 const SITE_TRACKS_LAYER_ID = "site-tracks-line";
+const GLIDE_SOURCE_ID = "glide-range";
+const GLIDE_FILL_LAYER_ID = "glide-range-fill";
+const GLIDE_LINE_LAYER_ID = "glide-range-line";
 
 // Canadian airspace (NAV CANADA data via OpenAIP, CC BY-NC 4.0), pre-filtered
 // to the Vancouver Island flying area by tools/fetchairspace -- see that
@@ -267,6 +270,13 @@ const style = {
       type: "geojson",
       data: { type: "FeatureCollection", features: [] },
     },
+    [GLIDE_SOURCE_ID]: {
+      // Populated from computeGlideRange -- empty until the user clicks the
+      // map with airspace off. Fill (annulus bands) and outline share this
+      // one source, filtered apart by the "kind" property below.
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    },
   },
   layers: [
     {
@@ -366,6 +376,23 @@ const style = {
       source: SITE_TRACKS_SOURCE_ID,
       layout: { "line-cap": "butt", "line-join": "round" },
       paint: { "line-color": "#ffcc00", "line-width": 5, "line-dasharray": [2, 2] },
+    },
+    {
+      // Nested 1:1..1:10 glide-reach bands -- see computeGlideRange. Each
+      // feature carries its own "color" so the paint expression doesn't need
+      // a 10-case match on the ratio property.
+      id: GLIDE_FILL_LAYER_ID,
+      type: "fill",
+      source: GLIDE_SOURCE_ID,
+      filter: ["==", ["get", "kind"], "band"],
+      paint: { "fill-color": ["get", "color"], "fill-opacity": 0.35 },
+    },
+    {
+      id: GLIDE_LINE_LAYER_ID,
+      type: "line",
+      source: GLIDE_SOURCE_ID,
+      filter: ["==", ["get", "kind"], "ring"],
+      paint: { "line-color": ["get", "color"], "line-width": 1.25, "line-opacity": 0.8 },
     },
   ],
 };
@@ -541,7 +568,10 @@ function applyAirspaceVisibility() {
   map.setLayoutProperty(AIRSPACE_FILL_LAYER_ID, "visibility", visibility);
   map.setLayoutProperty(AIRSPACE_LINE_LAYER_ID, "visibility", visibility);
   airspaceLegend.classList.toggle("airspace-legend-disabled", !airspaceToggle.checked);
-  if (airspaceToggle.checked) ensureAirspaceDataLoaded();
+  if (airspaceToggle.checked) {
+    ensureAirspaceDataLoaded();
+    clearGlideRange(); // the two overlays would just fight for the same pixels
+  }
 }
 
 map.on("load", () => {
@@ -550,6 +580,345 @@ map.on("load", () => {
 });
 airspaceToggle.addEventListener("change", applyAirspaceVisibility);
 airspaceClassCheckboxes.forEach((cb) => cb.addEventListener("change", applyAirspaceFilter));
+
+// --- Glide range tool ---
+//
+// A plain map click, with airspace switched off, draws nested 1:1..1:10
+// glide-reach bands around the click point: for each ratio, how far a pilot
+// starting right at that point's own ground elevation (0m AGL -- e.g.
+// launching off a ridge or cliff) could glide before the descending glide
+// slope meets rising terrain in that direction. Ratio 1 (steepest) is the
+// innermost band, ratio 10 (shallowest, furthest-reaching) the outermost.
+//
+// Terrain is sampled from the raw Terrarium DEM tiles directly (same
+// dataset as the hillshade/terrain sources above) rather than through
+// map.queryTerrainElevation, which only answers for tiles MapLibre has
+// already decoded for the current view -- a glide fan routinely reaches
+// well beyond the visible viewport.
+
+const ELEV_TILE_ZOOM = 12; // ~25m/px at this latitude -- plenty for a glide-planning aid
+// globalThis.Map, not the MapLibre Map class imported (shadowed) above.
+const elevTilePromises = new globalThis.Map(); // "z/x/y" -> Promise<ImageData | null>, for de-duping fetches
+const elevTileData = new globalThis.Map(); // "z/x/y" -> ImageData | null, set once that promise resolves
+
+function lngLatToTileXY(lng, lat, z) {
+  const n = 2 ** z;
+  const x = ((lng + 180) / 360) * n;
+  const latRad = (lat * Math.PI) / 180;
+  const y = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+  return [x, y];
+}
+
+function fetchElevTile(z, x, y) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        resolve(ctx.getImageData(0, 0, img.width, img.height));
+      } catch {
+        resolve(null); // tainted canvas -- treat as "no data" rather than throw
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = `https://elevation-tiles-prod.s3.amazonaws.com/terrarium/${z}/${x}/${y}.png`;
+  });
+}
+
+function getElevTile(z, x, y) {
+  const key = `${z}/${x}/${y}`;
+  let promise = elevTilePromises.get(key);
+  if (!promise) {
+    promise = fetchElevTile(z, x, y).then((data) => {
+      elevTileData.set(key, data);
+      return data;
+    });
+    elevTilePromises.set(key, promise);
+  }
+  return promise;
+}
+
+// Fetches every DEM tile covering the given lng/lat box (skipping ones
+// already cached) and resolves once they're all in.
+async function prefetchElevTiles(lngMin, lngMax, latMin, latMax) {
+  const [x0, y0] = lngLatToTileXY(lngMin, latMax, ELEV_TILE_ZOOM); // NW corner
+  const [x1, y1] = lngLatToTileXY(lngMax, latMin, ELEV_TILE_ZOOM); // SE corner
+  const jobs = [];
+  for (let x = Math.floor(x0); x <= Math.floor(x1); x++) {
+    for (let y = Math.floor(y0); y <= Math.floor(y1); y++) jobs.push(getElevTile(ELEV_TILE_ZOOM, x, y));
+  }
+  await Promise.all(jobs);
+}
+
+// Synchronous once the relevant tiles are cached (see prefetchElevTiles).
+// Nearest-pixel lookup -- fine at this resolution for a planning overlay.
+function sampleElevation(lng, lat) {
+  const [xf, yf] = lngLatToTileXY(lng, lat, ELEV_TILE_ZOOM);
+  const x = Math.floor(xf), y = Math.floor(yf);
+  const data = elevTileData.get(`${ELEV_TILE_ZOOM}/${x}/${y}`);
+  if (!data) return null;
+  const px = Math.min(data.width - 1, Math.max(0, Math.floor((xf - x) * data.width)));
+  const py = Math.min(data.height - 1, Math.max(0, Math.floor((yf - y) * data.height)));
+  const idx = (py * data.width + px) * 4;
+  return data.data[idx] * 256 + data.data[idx + 1] + data.data[idx + 2] / 256 - 32768;
+}
+
+const EARTH_RADIUS_M = 6371000;
+
+// Great-circle destination point, given a start, bearing, and distance.
+function destinationPoint(lng, lat, bearingDeg, distanceM) {
+  const angDist = distanceM / EARTH_RADIUS_M;
+  const bearing = (bearingDeg * Math.PI) / 180;
+  const φ1 = (lat * Math.PI) / 180;
+  const λ1 = (lng * Math.PI) / 180;
+  const φ2 = Math.asin(Math.sin(φ1) * Math.cos(angDist) + Math.cos(φ1) * Math.sin(angDist) * Math.cos(bearing));
+  const λ2 = λ1 + Math.atan2(Math.sin(bearing) * Math.sin(angDist) * Math.cos(φ1), Math.cos(angDist) - Math.sin(φ1) * Math.sin(φ2));
+  return [((λ2 * 180) / Math.PI + 540) % 360 - 180, (φ2 * 180) / Math.PI];
+}
+
+function haversineDistance(lng1, lat1, lng2, lat2) {
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLng = (lng2 - lng1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
+}
+
+function ringSignedArea(coords) {
+  let sum = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const [x1, y1] = coords[i];
+    const [x2, y2] = coords[i + 1];
+    sum += x1 * y2 - x2 * y1;
+  }
+  return sum;
+}
+
+// GeoJSON wants exterior rings counter-clockwise and holes clockwise.
+function orientRing(coords, ccw) {
+  return ringSignedArea(coords) > 0 === ccw ? coords : [...coords].reverse();
+}
+
+const GLIDE_RATIOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // steepest (smallest reach) first
+const GLIDE_RAY_COUNT = 72; // every 5°
+const GLIDE_STEP_M = 100; // coarse scan step -- see GLIDE_REFINE_ITERS for the actual boundary precision
+const GLIDE_REFINE_ITERS = 6; // bisection steps once a ray's coarse scan finds the bracket it grounds out in -- ~1.6m precision at a 100m step
+const GLIDE_MIN_RADIUS_M = 3000;
+const GLIDE_MAX_RADIUS_M = 25000;
+
+function glideColor(ratio) {
+  const t = (ratio - 1) / 9; // 0 (1:1, steepest) .. 1 (1:10, shallowest)
+  // Full red -> violet sweep (ROYGBIV) rather than just red -> green, so all
+  // 10 bands stay visually distinct instead of bunching up in one corner of
+  // the hue wheel.
+  return `hsl(${Math.round(t * 270)}, 85%, 50%)`;
+}
+
+const glideLegend = document.getElementById("glideLegend");
+let glideRequestToken = 0;
+let glideOrigin = null; // { lng, lat, elev } for the currently shown fan, or null
+
+// The ratio a pilot starting at glideOrigin (0m AGL there) would need in
+// order to reach (lng,lat) in a straight line without ever dipping under
+// intervening terrain -- i.e. exactly the shallowest band that point would
+// fall inside, but computed continuously for wherever the cursor actually
+// is instead of snapping to one of the 10 rendered bands. Returns null if
+// there's no fan yet, the point is too close to the origin to say anything
+// meaningful, or terrain data isn't cached that far out; Infinity if terrain
+// clearly above launch height blocks the path outright.
+const GLIDE_HOVER_SAMPLES = 40;
+// The DEM is ~25-30m/px (see ELEV_TILE_ZOOM) and sampled nearest-pixel, so a
+// hover point within a pixel or two of the origin often lands on the exact
+// same pixel as the origin's own elevation sample -- a height difference of
+// precisely 0, not a real obstacle. Below this distance there's nothing
+// meaningful to report; above it, this much tolerance keeps that same
+// quantization noise from reporting a *closer* point as impossible right
+// next to a *farther* one that reads as perfectly reachable.
+const GLIDE_HOVER_MIN_DIST_M = 30;
+const GLIDE_ELEV_NOISE_M = 5;
+function requiredGlideRatio(lng, lat) {
+  if (!glideOrigin) return null;
+  const dist = haversineDistance(glideOrigin.lng, glideOrigin.lat, lng, lat);
+  if (dist < GLIDE_HOVER_MIN_DIST_M) return null;
+  let maxRatio = 0;
+  for (let i = 1; i <= GLIDE_HOVER_SAMPLES; i++) {
+    const t = i / GLIDE_HOVER_SAMPLES;
+    const plng = glideOrigin.lng + (lng - glideOrigin.lng) * t;
+    const plat = glideOrigin.lat + (lat - glideOrigin.lat) * t;
+    const elev = sampleElevation(plng, plat);
+    if (elev == null) return null;
+    const headroom = glideOrigin.elev - elev;
+    if (headroom <= -GLIDE_ELEV_NOISE_M) return Infinity; // genuinely higher terrain -- no finite ratio clears it
+    maxRatio = Math.max(maxRatio, (dist * t) / Math.max(headroom, GLIDE_ELEV_NOISE_M));
+  }
+  return maxRatio;
+}
+
+function clearGlideRange() {
+  glideRequestToken++; // discards the result of any computation still in flight
+  glideOrigin = null;
+  map.getSource(GLIDE_SOURCE_ID)?.setData({ type: "FeatureCollection", features: [] });
+  glideLegend.hidden = true;
+  glideLegend.innerHTML = "";
+  glideHoverTip.hidden = true;
+}
+
+function renderGlideLegend(originElevM) {
+  glideLegend.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "glide-legend-title";
+  title.textContent = `Glide reach from ${Math.round(originElevM)} m`;
+  const rows = document.createElement("div");
+  rows.className = "glide-legend-rows";
+  // Shallowest (furthest-reaching, outermost band) listed first.
+  for (const ratio of [...GLIDE_RATIOS].reverse()) {
+    const row = document.createElement("div");
+    row.className = "glide-legend-row";
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = glideColor(ratio);
+    row.append(swatch, document.createTextNode(`1:${ratio}`));
+    rows.append(row);
+  }
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.textContent = "Clear";
+  clearBtn.addEventListener("click", clearGlideRange);
+  glideLegend.append(title, rows, clearBtn);
+  glideLegend.hidden = false;
+}
+
+function showGlideError(message) {
+  glideLegend.innerHTML = "";
+  const text = document.createElement("div");
+  text.className = "glide-legend-title";
+  text.textContent = message;
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.textContent = "Dismiss";
+  dismissBtn.addEventListener("click", clearGlideRange);
+  glideLegend.append(text, dismissBtn);
+  glideLegend.hidden = false;
+}
+
+async function computeGlideRange(lng, lat) {
+  const token = ++glideRequestToken;
+  map.getCanvas().style.cursor = "wait";
+  try {
+    await prefetchElevTiles(lng, lng, lat, lat);
+    if (token !== glideRequestToken) return;
+    const originElev = sampleElevation(lng, lat);
+    if (originElev == null) {
+      showGlideError("No terrain data at that point.");
+      return;
+    }
+
+    const maxRadius = Math.min(GLIDE_MAX_RADIUS_M, Math.max(GLIDE_MIN_RADIUS_M, originElev * 10));
+    const dLat = maxRadius / 111320;
+    const dLng = maxRadius / (111320 * Math.cos((lat * Math.PI) / 180));
+    await prefetchElevTiles(lng - dLng, lng + dLng, lat - dLat, lat + dLat);
+    if (token !== glideRequestToken) return;
+
+    // boundary[ratio][i] = reachable distance (m) along ray i, for that ratio.
+    const boundary = Object.fromEntries(GLIDE_RATIOS.map((r) => [r, new Array(GLIDE_RAY_COUNT).fill(maxRadius)]));
+
+    for (let i = 0; i < GLIDE_RAY_COUNT; i++) {
+      const bearing = (360 / GLIDE_RAY_COUNT) * i;
+      const unresolved = new Set(GLIDE_RATIOS);
+      let lastSafeD = 0; // the most recent distance every still-unresolved ratio was confirmed clear at
+      for (let d = GLIDE_STEP_M; d <= maxRadius && unresolved.size > 0; d += GLIDE_STEP_M) {
+        const [plng, plat] = destinationPoint(lng, lat, bearing, d);
+        const elev = sampleElevation(plng, plat);
+        if (elev == null) {
+          // Edge of the prefetched box -- stop here rather than assume open
+          // air beyond it (shouldn't normally happen; the box is sized with
+          // margin for exactly this radius).
+          for (const r of unresolved) boundary[r][i] = lastSafeD;
+          break;
+        }
+        for (const r of [...unresolved]) {
+          if (elev >= originElev - d / r) {
+            // Ground was hit somewhere between lastSafeD (still clear) and d
+            // (already grounded) -- bisect that bracket instead of just
+            // reporting d, which would otherwise round every ratio up to the
+            // same coarse step size. That's glaring for steep ratios: a 1:1
+            // glide loses GLIDE_STEP_M of altitude within GLIDE_STEP_M of
+            // travel, so it grounds out on the very first sample in nearly
+            // every direction, and without refinement every ray reports
+            // exactly the same "distance" -- a perfect circle that reflects
+            // the sampling grid, not the terrain.
+            let lo = lastSafeD;
+            let hi = d;
+            for (let k = 0; k < GLIDE_REFINE_ITERS; k++) {
+              const mid = (lo + hi) / 2;
+              const [mlng, mlat] = destinationPoint(lng, lat, bearing, mid);
+              const mElev = sampleElevation(mlng, mlat);
+              if (mElev == null || mElev >= originElev - mid / r) hi = mid;
+              else lo = mid;
+            }
+            boundary[r][i] = hi;
+            unresolved.delete(r);
+          }
+        }
+        lastSafeD = d;
+      }
+    }
+
+    if (token !== glideRequestToken) return;
+
+    const rings = {};
+    for (const r of GLIDE_RATIOS) {
+      const pts = boundary[r].map((dist, i) => destinationPoint(lng, lat, (360 / GLIDE_RAY_COUNT) * i, dist));
+      pts.push(pts[0]);
+      rings[r] = pts;
+    }
+
+    const features = [];
+    let prevRing = null;
+    for (const r of GLIDE_RATIOS) {
+      const color = glideColor(r);
+      const outer = orientRing(rings[r], true);
+      const coordinates = prevRing ? [outer, orientRing(prevRing, false)] : [outer];
+      features.push({ type: "Feature", properties: { kind: "band", ratio: r, color }, geometry: { type: "Polygon", coordinates } });
+      features.push({ type: "Feature", properties: { kind: "ring", ratio: r, color }, geometry: { type: "LineString", coordinates: rings[r] } });
+      prevRing = rings[r];
+    }
+
+    map.getSource(GLIDE_SOURCE_ID)?.setData({ type: "FeatureCollection", features });
+    glideOrigin = { lng, lat, elev: originElev };
+    renderGlideLegend(originElev);
+  } catch (err) {
+    console.error("[glide] failed to compute glide range:", err);
+    if (token === glideRequestToken) showGlideError("Couldn't compute glide range.");
+  } finally {
+    if (token === glideRequestToken) map.getCanvas().style.cursor = "";
+  }
+}
+
+const glideHoverTip = document.getElementById("glideHoverTip");
+map.on("mousemove", (e) => {
+  const ratio = requiredGlideRatio(e.lngLat.lng, e.lngLat.lat);
+  if (ratio == null) {
+    glideHoverTip.hidden = true;
+    return;
+  }
+  glideHoverTip.textContent = ratio === Infinity ? "unreachable" : `1:${ratio.toFixed(2)}`;
+  glideHoverTip.style.left = `${e.point.x + 14}px`;
+  glideHoverTip.style.top = `${e.point.y + 14}px`;
+  glideHoverTip.hidden = false;
+});
+map.on("mouseout", () => {
+  glideHoverTip.hidden = true;
+});
+
+map.on("click", (e) => {
+  if (!airspaceToggle.checked) computeGlideRange(e.lngLat.lng, e.lngLat.lat);
+});
 
 // Rough centroid (mean vertex of its largest ring) of a Polygon/
 // MultiPolygon, used only as a sample point for queryTerrainElevation --
@@ -998,6 +1367,13 @@ function renderMarkers() {
     const labelEl = document.createElement("div");
     labelEl.className = "site-marker-label";
     labelEl.textContent = site.name;
+    // Without this, a click landing on the label text (rather than the pin
+    // icon itself) falls straight through to the map underneath -- opening
+    // nothing, and, with airspace off, firing the glide range tool instead.
+    labelEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showDetail(site.id);
+    });
     const labelMarker = new Marker({ element: labelEl, anchor: "left", offset: [10, 0] })
       .setLngLat([site.longitude, site.latitude])
       .addTo(map);
