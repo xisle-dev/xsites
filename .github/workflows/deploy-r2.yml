@@ -27,13 +27,13 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
-          # sites.json and media/* are excluded from --delete's scope because,
-          # as of the Cloud Run editor (github issue #1, Phase 8), those keys
-          # are kept live by the editor writing directly to this same bucket
-          # on every save -- this workflow only manages the static code/asset
-          # files now. Without the exclusion, every code-only deploy would
-          # wipe out whatever the editor most recently published, reverting
-          # to this repo's now-stale sites/*.yaml snapshot.
+          # sites.json and media/* are excluded from --delete's scope because
+          # the Cloudflare Worker editor (worker/, github issue #11) mirrors
+          # every save straight into this same bucket -- this workflow only
+          # manages the static code/asset files now. Without the exclusion,
+          # every code-only deploy would wipe out whatever the editor most
+          # recently published, reverting to this repo's now-stale
+          # sites/*.yaml snapshot.
           aws s3 sync dist/ "s3://${{ secrets.R2_BUCKET_NAME }}" \
             --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com" \
             --delete \
