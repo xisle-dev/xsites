@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Idempotently configures Cloudflare Access in front of the xsites editor
-# Worker: a self-hosted Access application on the given hostname, an
-# email One-Time-PIN login method (Cloudflare's default, but not
+# Worker: a self-hosted Access application on the given hostname (optionally
+# scoped to specific path patterns, so the rest of the hostname stays
+# public), an email One-Time-PIN login method (Cloudflare's default, but not
 # auto-provisioned on a fresh Zero Trust account), and an allow policy for
 # each address passed in. Safe to re-run -- every step checks for an
-# existing resource by name/domain before creating one. See github issue #19.
+# existing resource by name/domain before creating one. See github issues
+# #19 and #20 -- and the "public read-only + gated /admin" split described
+# there, since worker/index.ts serves a public read-only viewer at "/" with
+# the full CRUD editor moved to "/admin", so only "/admin" and "/api" need
+# to sit behind Access.
 #
 # Requires:
 #   - Zero Trust already enabled on the account (one-time, dashboard-only --
@@ -15,23 +20,45 @@
 #     (My Profile -> API Tokens -> Create Token -> Custom Token).
 #
 # Usage:
-#   CF_ACCOUNT_ID=... CF_ACCESS_TOKEN=... ./setup-access.sh \
-#     xsites-editor.gtissington.workers.dev gtissington@gmail.com [more emails...]
+#   CF_ACCOUNT_ID=... CF_ACCESS_TOKEN=... ./setup-access.sh [--paths p1,p2,...] \
+#     <domain> <email> [more emails...]
+#
+#   --paths defaults to "admin*,api*" (matching <domain>/admin* and
+#   <domain>/api*); pass --paths "" (or just omit any path segment) to
+#   protect the whole domain instead, e.g. for a bare workers.dev fallback
+#   host with no public split.
 
 set -euo pipefail
 
+PATHS="admin*,api*"
+if [ "${1:-}" = "--paths" ]; then
+  PATHS="$2"
+  shift 2
+fi
+
 ACCOUNT_ID="${CF_ACCOUNT_ID:?set CF_ACCOUNT_ID (see: wrangler whoami)}"
 TOKEN="${CF_ACCESS_TOKEN:?set CF_ACCESS_TOKEN to a token with Access edit permissions}"
-DOMAIN="${1:?usage: setup-access.sh <domain> <email> [email...]}"
+DOMAIN="${1:?usage: setup-access.sh [--paths p1,p2,...] <domain> <email> [email...]}"
 shift
 EMAILS=("$@")
 if [ "${#EMAILS[@]}" -eq 0 ]; then
-  echo "usage: setup-access.sh <domain> <email> [email...]" >&2
+  echo "usage: setup-access.sh [--paths p1,p2,...] <domain> <email> [email...]" >&2
   exit 1
 fi
 
 API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID"
 auth=(-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
+
+# Build the destinations array: one entry per path pattern (each protecting
+# <domain>/<path>), or a single whole-domain entry if PATHS is empty.
+if [ -z "$PATHS" ]; then
+  destinations=$(jq -n --arg d "$DOMAIN" '[{type: "public", uri: $d}]')
+  match_domain="$DOMAIN"
+else
+  destinations=$(IFS=,; for p in $PATHS; do printf '%s/%s\n' "$DOMAIN" "$p"; done \
+    | jq -R '{type: "public", uri: .}' | jq -s .)
+  match_domain=$(IFS=,; set -- $PATHS; printf '%s/%s' "$DOMAIN" "$1")
+fi
 
 # --- One-time PIN identity provider ---------------------------------------
 idp_id=$(curl -sS "$API/access/identity_providers" "${auth[@]}" \
@@ -46,17 +73,16 @@ else
 fi
 
 # --- Self-hosted Access application ----------------------------------------
+# Matched by the first destination's exact string, which is stable across
+# re-runs as long as PATHS's first entry doesn't change.
 app_id=$(curl -sS "$API/access/apps" "${auth[@]}" \
-  | jq -r --arg d "$DOMAIN" '.result[] | select(.domain == $d) | .id' | head -1)
+  | jq -r --arg d "$match_domain" '.result[] | select(.domain == $d or (.self_hosted_domains // [] | index($d))) | .id' | head -1)
 
-# jq builds the emails array as {"type":"allow","include":[{"email":{"email":"..."}}, ...]}
-policy_include=$(printf '%s\n' "${EMAILS[@]}" | jq -R '{email: {email: .}}' | jq -s .)
-
-app_body=$(jq -n --arg domain "$DOMAIN" --arg idp "$idp_id" \
-  '{name: "xsites editor", domain: $domain, type: "self_hosted", session_duration: "24h", auto_redirect_to_identity: false, allowed_idps: [$idp]}')
+app_body=$(jq -n --arg idp "$idp_id" --argjson destinations "$destinations" \
+  '{name: "xsites editor", type: "self_hosted", session_duration: "24h", auto_redirect_to_identity: false, allowed_idps: [$idp], destinations: $destinations}')
 
 if [ -z "$app_id" ]; then
-  echo "Creating Access application for $DOMAIN..."
+  echo "Creating Access application for $DOMAIN (paths: ${PATHS:-<whole domain>})..."
   app_id=$(curl -sS -X POST "$API/access/apps" "${auth[@]}" -d "$app_body" | jq -r '.result.id')
 else
   echo "Access application for $DOMAIN already exists ($app_id), updating..."
@@ -67,6 +93,8 @@ fi
 policy_id=$(curl -sS "$API/access/apps/$app_id/policies" "${auth[@]}" \
   | jq -r '.result[] | select(.name == "allow-owner-email-otp") | .id' | head -1)
 
+# jq builds the emails array as [{"email":{"email":"..."}}, ...]
+policy_include=$(printf '%s\n' "${EMAILS[@]}" | jq -R '{email: {email: .}}' | jq -s .)
 policy_body=$(jq -n --argjson include "$policy_include" \
   '{name: "allow-owner-email-otp", decision: "allow", include: $include}')
 
@@ -78,4 +106,4 @@ else
   curl -sS -X PUT "$API/access/apps/$app_id/policies/$policy_id" "${auth[@]}" -d "$policy_body" >/dev/null
 fi
 
-echo "Done. $DOMAIN is now protected; allowed: ${EMAILS[*]}"
+echo "Done. $DOMAIN (paths: ${PATHS:-<whole domain>}) is now protected; allowed: ${EMAILS[*]}"

@@ -1,12 +1,8 @@
-// X/Sites — public read-only viewer, served at the Worker's root. Same map
-// (Google satellite + AWS DEM terrain + Protomaps vector labels) as the full
-// editor, but sites come from the Worker's public /sites.json (mirrored from
-// the live data on every save, see worker/src/publish.ts) instead of a live
-// /api/sites, labels come from the Worker's /tiles/* proxy (same route the
-// editor uses, see worker/src/tiles.ts) rather than a direct .pmtiles range
-// read, and there's no add/edit/delete/upload UI -- this build has nowhere
-// to write changes back to. Sign in (top-right) to reach the full editor at
-// /admin/, gated by Cloudflare Access.
+// xsite — Google satellite imagery draped over AWS global DEM terrain.
+//
+// Same gtiles:// session-protocol bridge as dem-compare / vancouver-island-3d-map
+// for fetching Google's authenticated 2D satellite tiles. Terrain uses AWS's
+// global Terrarium-encoded elevation-tiles-prod DEM (~30m resolution).
 import {
   Map,
   Marker,
@@ -35,6 +31,10 @@ async function ensureGoogleSession() {
         mapType: "satellite",
         language: "en-US",
         region: "US",
+        // No layerRoadmap: Google bakes road/place labels into the raster
+        // pixels, so they rotate (and go upside-down) with map bearing.
+        // Labels come from the Protomaps vector tile layer below instead,
+        // which stays upright at any bearing.
         layerTypes: [],
         overlay: false,
         scale: "scaleFactor1x",
@@ -67,17 +67,18 @@ addProtocol("gtiles", async (params, abortController) => {
 });
 
 // Fetched up front, before the map is created, so the initial camera can
-// already be framed around every site. Fetching sites.json only after the
+// already be framed around every site. Fetching /api/sites only after the
 // map's first "load" (as this used to) meant starting at a fixed, tight
 // view, then jumping to the fitted-to-all-sites view a moment later once
 // the fetch resolved -- visibly a second, differently-zoomed set of
 // terrain/satellite tiles loading right after the first.
 let sites = [];
 try {
-  const res = await fetch("sites.json");
+  const res = await fetch("/api/sites");
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
   sites = await res.json();
 } catch (err) {
-  console.error("[sites] failed to load sites.json:", err);
+  console.error("[sites] failed to load /api/sites:", err);
 }
 
 // Bounding box (10% buffer, floored so a single site or a tight cluster
@@ -112,7 +113,7 @@ const urlSite = urlParams.has("site") ? sites.find((s) => s.id === urlParams.get
 const urlHasCamera = urlParams.has("lng") && urlParams.has("lat");
 
 const START_BOUNDS = urlSite || urlHasCamera ? null : boundsForSites(sites);
-// Fallback center/zoom if sites.json failed to load or was empty, and
+// Fallback center/zoom if /api/sites failed to load or was empty, and
 // neither a site nor a camera position came in on the URL.
 const START = urlSite
   ? {
@@ -163,6 +164,11 @@ function updateUrl() {
   history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
 }
 
+// MapLibre warns (and renders worse) if one raster-dem source is used both
+// for a hillshade layer AND for setTerrain() at the same time — use two
+// separate sources pointed at the same tile template so terrain exaggeration
+// updates aren't contending with the hillshade layer's own use of that
+// source (see dem-compare's app.js for the full writeup of this failure mode).
 const HILLSHADE_SOURCE_ID = "dem-hillshade";
 const TERRAIN_SOURCE_ID = "dem-terrain";
 const SAT_SOURCE_ID = "satellite";
@@ -198,9 +204,16 @@ const airspaceColorExpr = [
   "#999999",
 ];
 
-// Place/road/city labels as real vector text, same tuning as the full app
-// (see app.js for the detailed writeup of why: upright at any bearing,
-// unlike Google's raster labels).
+// Place/road/city labels as real vector text (Protomaps basemap extract,
+// served locally by go-pmtiles), instead of Google's raster labels which
+// are baked into the imagery pixels and rotate (upside-down at bearing
+// 180°) with the map. Point labels use text-rotation-alignment: "viewport"
+// in the Protomaps style so they always stay upright; road labels follow
+// their line but MapLibre's default text-keep-upright flips them so they
+// never render upside-down either.
+// Text only, no sprite icons (park/POI markers etc.) -- we're not loading
+// Protomaps' sprite sheet, so stripping icon-image avoids missing-image
+// console warnings for layers that would otherwise draw a blank icon.
 const labelLayers = pmLayers(LABELS_SOURCE_ID, namedFlavor("dark"), { lang: "en" })
   .filter((l) => l.type === "symbol" && l.layout?.["text-field"])
   .map((l) => {
@@ -209,6 +222,10 @@ const labelLayers = pmLayers(LABELS_SOURCE_ID, namedFlavor("dark"), { lang: "en"
     return { ...l, layout };
   });
 
+// Scale a text-size value/expression by `factor`. Handles the two shapes
+// the basemap style actually uses: a plain number, or a zoom "interpolate"
+// expression (["interpolate", interp, ["zoom"], zoom1, size1, zoom2, size2, ...]
+// -- sizes are the even-indexed entries starting at 4).
 function scaleTextSize(expr, factor) {
   if (typeof expr === "number") return expr * factor;
   if (Array.isArray(expr) && expr[0] === "interpolate") {
@@ -219,6 +236,9 @@ function scaleTextSize(expr, factor) {
   return expr;
 }
 
+// Pull the entries matching `kind` out of a layer sharing one filter/style
+// across many kinds, into their own layer, so they can be sized/zoomed
+// independently without affecting the rest of that layer's features.
 function splitOutKind(layers, layerId, kind, restFilter, extractedFilter, tweak) {
   const idx = layers.findIndex((l) => l.id === layerId);
   if (idx === -1) return layers;
@@ -232,10 +252,14 @@ function splitOutKind(layers, layerId, kind, restFilter, extractedFilter, tweak)
 
 let tunedLabelLayers = labelLayers;
 
+// Mountain peak labels live inside the shared "pois" layer (park, cafe,
+// museum, ... all one layer/filter). Split peaks out: 1.5x text size, and
+// visible 2 zoom levels earlier than the basemap default (each pois feature
+// carries its own min_zoom; the shared layer gates on zoom >= min_zoom + 0).
 {
   const pois = tunedLabelLayers.find((l) => l.id === "pois");
   if (pois) {
-    const kinds = pois.filter[1][2][1];
+    const kinds = pois.filter[1][2][1]; // ["all", ["in", ["get","kind"], ["literal", [...]]], zoomExpr]
     tunedLabelLayers = splitOutKind(
       tunedLabelLayers,
       "pois",
@@ -247,6 +271,8 @@ let tunedLabelLayers = labelLayers;
   }
 }
 
+// Trail names live inside "roads_labels_minor" alongside minor roads and
+// "other" -- same treatment: 1.5x text size, minzoom 2 levels earlier.
 {
   const roadsMinor = tunedLabelLayers.find((l) => l.id === "roads_labels_minor");
   if (roadsMinor) {
@@ -345,6 +371,9 @@ const style = {
       id: SAT_LAYER_ID,
       type: "raster",
       source: SAT_SOURCE_ID,
+      // Left below full opacity so the hillshade underneath still shows
+      // through — imagery alone often reads flatter than the terrain mesh
+      // actually is, especially over uniform forest canopy.
       paint: { "raster-opacity": 0.92 },
     },
     {
@@ -476,6 +505,8 @@ function applyTerrain() {
 
 map.on("load", applyTerrain);
 
+// --- UI wiring ---
+
 const pitchInput = document.getElementById("pitch");
 const pitchValue = document.getElementById("pitchValue");
 pitchInput.addEventListener("input", (e) => {
@@ -511,6 +542,8 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Keep the pitch slider in sync when pitch changes some other way (flyTo,
+// drag-to-rotate-and-pitch), not just via the slider itself.
 map.on("pitch", () => {
   const p = map.getPitch();
   pitchInput.value = p;
@@ -604,7 +637,7 @@ let airspaceDataRequested = false;
 function ensureAirspaceDataLoaded() {
   if (airspaceDataRequested) return;
   airspaceDataRequested = true;
-  fetch(new URL("data/airspace.geojson", window.location.href).href)
+  fetch(`${window.location.origin}/data/airspace.geojson`)
     .then((res) => res.json())
     .then((geojson) => map.getSource(AIRSPACE_SOURCE_ID)?.setData(geojson))
     .catch((err) => {
@@ -634,12 +667,13 @@ airspaceClassCheckboxes.forEach((cb) => cb.addEventListener("change", applyAirsp
 
 // --- Glide range tool ---
 //
-// A plain map click, with airspace switched off, draws nested 1:1..1:10
-// glide-reach bands around the click point: for each ratio, how far a pilot
-// starting right at that point's own ground elevation (0m AGL -- e.g.
-// launching off a ridge or cliff) could glide before the descending glide
-// slope meets rising terrain in that direction. Ratio 1 (steepest) is the
-// innermost band, ratio 10 (shallowest, furthest-reaching) the outermost.
+// A plain map click, while not placing a site pin and with airspace
+// switched off, draws nested 1:1..1:10 glide-reach bands around the click
+// point: for each ratio, how far a pilot starting right at that point's own
+// ground elevation (0m AGL -- e.g. launching off a ridge or cliff) could
+// glide before the descending glide slope meets rising terrain in that
+// direction. Ratio 1 (steepest) is the innermost band, ratio 10
+// (shallowest, furthest-reaching) the outermost.
 //
 // Terrain is sampled from the raw Terrarium DEM tiles directly (same
 // dataset as the hillshade/terrain sources above) rather than through
@@ -967,10 +1001,18 @@ map.on("mouseout", () => {
   glideHoverTip.hidden = true;
 });
 
-map.on("click", (e) => {
-  if (!airspaceToggle.checked) computeGlideRange(e.lngLat.lng, e.lngLat.lat);
-});
-
+// Traces the given geometry (or clears the trace if null) in the highlight
+// layer, carrying `properties` along so the label layer can show the same
+// name/class/floor/ceiling the panel row does -- used so hovering a panel
+// entry shows which polygon on the map it refers to, with its full details,
+// without having to look back at the panel to read them.
+//
+// `properties` here is a Feature.properties object handed back by
+// queryRenderedFeatures, which isn't a plain Object -- passing it straight
+// into setData() makes the source silently drop the feature entirely
+// (setData()/isSourceLoaded() both still report success, but nothing is
+// ever tiled or rendered, and there's no error to catch). Spreading it into
+// a genuine plain object first fixes it.
 // Rough centroid (mean vertex of its largest ring) of a Polygon/
 // MultiPolygon, used only as a sample point for queryTerrainElevation --
 // doesn't need to be precise, just reliably inside the shape.
@@ -1029,20 +1071,6 @@ function computeExtrusionRange(geometry, props) {
   return [base, top];
 }
 
-// Traces the given geometry (or clears the trace if null) in the highlight
-// layer, carrying `properties` along so the label layer can show the same
-// name/class/floor/ceiling the panel row does, and so the volume layer can
-// extrude just this one shape from its floor to its ceiling -- used so
-// hovering a panel entry shows which polygon on the map it refers to, with
-// its full details and true 3D extent, without having to look back at the
-// panel to read them.
-//
-// `properties` here is a Feature.properties object handed back by
-// queryRenderedFeatures, which isn't a plain Object -- passing it straight
-// into setData() makes the source silently drop the feature entirely
-// (setData()/isSourceLoaded() both still report success, but nothing is
-// ever tiled or rendered, and there's no error to catch). Spreading it into
-// a genuine plain object first fixes it.
 function setAirspaceHighlight(geometry, properties) {
   const source = map.getSource(AIRSPACE_HIGHLIGHT_SOURCE_ID);
   if (!source) return;
@@ -1111,8 +1139,10 @@ function sortAirspaceEntries(entries) {
 }
 
 function showAirspaceList(entries) {
+  stopPlacing();
   sitesListView.hidden = true;
   siteDetailView.hidden = true;
+  siteForm.hidden = true;
   airspaceListView.hidden = false;
   expandPanel();
 
@@ -1153,6 +1183,9 @@ function showAirspaceList(entries) {
 }
 
 map.on("click", AIRSPACE_FILL_LAYER_ID, (e) => {
+  // Don't show airspace info while the user is trying to place/reposition
+  // a site pin -- let the general click handler below handle it instead.
+  if (placingMode) return;
   if (!e.features || e.features.length === 0) return;
   // A click point commonly sits inside several stacked airspace volumes at
   // once (e.g. a Class E floor under a Class B shelf) -- list all of them,
@@ -1284,19 +1317,51 @@ document.addEventListener("click", (e) => {
   if (!placeSuggestionsEl.hidden && !e.target.closest(".topbar-search")) hidePlaceSuggestions();
 });
 
-// --- Sites: read-only, from the baked-in sites.json (already fetched
-// above, before the map was created) ---
+// --- Sites: markers + CRUD against the local /api/sites backend (data
+// already fetched above, before the map was created) ---
 
 const markersById = {};
 const labelMarkersById = {};
-let selectedSiteId = null; // the site currently open in the detail view, if any -- drives the ?site= URL param
+// null while inactive; "new" while placing a brand-new site (from the list's
+// "+ Add" button, before any form is open); "reposition" while updating the
+// pin of whichever form (add or edit) is currently open.
+let placingMode = null;
+let editingId = null; // null while adding a new site
+let selectedSiteId = null; // the site currently open in the read-only detail view, if any -- drives the ?site= URL param
+let formView = null; // {latitude, longitude, zoom, bearing, pitch} camera preset for the form in progress
+let formSite = null; // site object backing the open form's media list; null until the site exists (saved at least once)
 
 const sitesListView = document.getElementById("sitesListView");
 const siteDetailView = document.getElementById("siteDetailView");
+const siteForm = document.getElementById("siteForm");
 const siteList = document.getElementById("siteList");
 const siteSearch = document.getElementById("siteSearch");
 const areaFilter = document.getElementById("areaFilter");
 const siteDetailContent = document.getElementById("siteDetailContent");
+const placingBanner = document.getElementById("placingBanner");
+const fViewSummary = document.getElementById("fViewSummary");
+const mediaList = document.getElementById("mediaList");
+const mediaInput = document.getElementById("mediaInput");
+const mediaHint = document.getElementById("mediaHint");
+
+// The existing site data was originally authored with Quill (its "ql-ui"
+// spans and data-list attributes show up in a few description/hazards
+// fields already) -- using it here too keeps new edits in the same HTML
+// shape as the rest of the dataset instead of introducing a second dialect.
+const richTextToolbar = [[{ header: [3, false] }], ["bold", "italic"], [{ list: "ordered" }, { list: "bullet" }], ["link"], ["clean"]];
+const descriptionEditor = new window.Quill("#fDescription", { theme: "snow", modules: { toolbar: richTextToolbar } });
+const hazardsEditor = new window.Quill("#fHazards", { theme: "snow", modules: { toolbar: richTextToolbar } });
+
+// Keep the toolbar out of the way until the editor actually has the cursor.
+// Quill's own toolbar buttons preventDefault on mousedown specifically so
+// clicking them doesn't blur the editor first, so this doesn't fight itself.
+for (const editor of [descriptionEditor, hazardsEditor]) {
+  const toolbar = editor.getModule("toolbar").container;
+  toolbar.classList.add("rte-toolbar-hidden");
+  editor.on("selection-change", (range) => {
+    toolbar.classList.toggle("rte-toolbar-hidden", !range);
+  });
+}
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -1311,7 +1376,7 @@ function mediaKindLabel(type) {
   return type === "pdf" ? "PDF" : type === "gpx" ? "GPX" : "FILE";
 }
 
-// Photo thumbnail, linking out to the full image.
+// Read-only photo thumbnail, linking out to the full image.
 function mediaThumbHtml(r) {
   return `
     <a class="media-thumb" href="${escapeHtml(r.url)}" target="_blank" rel="noopener">
@@ -1319,8 +1384,8 @@ function mediaThumbHtml(r) {
     </a>`;
 }
 
-// PDF/GPX row: a named link plus its description. GPX tracks download
-// (viewing raw XML inline isn't useful); PDFs open in a new tab.
+// Read-only PDF/GPX row: a named link plus its description. GPX tracks
+// download (viewing raw XML inline isn't useful); PDFs open in a new tab.
 function mediaFileRowHtml(r) {
   const filename = r.url.split("/").pop();
   return `
@@ -1375,6 +1440,18 @@ async function loadSiteTracks(site) {
   setSiteTracks(perFile.flat());
 }
 
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+// The search box and area dropdown together define "visible": both the
+// marker set on the map and the sidebar list are this same set, so they
+// never disagree about what's currently shown.
 function getFilteredSites() {
   const q = siteSearch.value.trim().toLowerCase();
   const area = areaFilter.value;
@@ -1383,6 +1460,9 @@ function getFilteredSites() {
     .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.area || "").toLowerCase().includes(q));
 }
 
+// Zoom/pan to the bounding box of the currently-visible pins plus a 10%
+// buffer on each side, so the visible set is framed without markers sitting
+// right at the viewport edge.
 function fitToVisibleSites() {
   const bounds = boundsForSites(getFilteredSites());
   if (bounds) map.fitBounds(bounds, { duration: 0 });
@@ -1452,6 +1532,8 @@ function renderSiteList() {
   });
 }
 
+// Re-applying the search text or area dropdown re-derives both the marker
+// set and the list, then reframes the map on whatever's now visible.
 function applyFilters() {
   renderMarkers();
   renderSiteList();
@@ -1472,8 +1554,10 @@ function flyToSite(site) {
 }
 
 function showListView() {
+  stopPlacing();
   sitesListView.hidden = false;
   siteDetailView.hidden = true;
+  siteForm.hidden = true;
   airspaceListView.hidden = true;
   setSiteTracks([]);
   selectedSiteId = null;
@@ -1481,10 +1565,12 @@ function showListView() {
 }
 
 function showDetail(id) {
+  stopPlacing();
   const site = sites.find((s) => s.id === id);
   if (!site) return;
   selectedSiteId = id;
   sitesListView.hidden = true;
+  siteForm.hidden = true;
   airspaceListView.hidden = true;
   siteDetailView.hidden = false;
   expandPanel();
@@ -1512,16 +1598,269 @@ function showDetail(id) {
 
     <div class="buttons">
       <button id="flyHereBtn">Fly here</button>
+      <button id="editSiteBtn">Edit</button>
+    </div>
+    <div class="buttons">
+      <button id="deleteSiteBtn">Delete site</button>
     </div>
   `;
 
   document.getElementById("flyHereBtn").addEventListener("click", () => flyToSite(site));
+  document.getElementById("editSiteBtn").addEventListener("click", () => showForm(site));
+  document.getElementById("deleteSiteBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${site.name}"? This also removes its photos.`)) return;
+    await api(`/api/sites/${site.id}`, { method: "DELETE" });
+    sites = sites.filter((s) => s.id !== site.id);
+    renderMarkers();
+    populateAreaFilter();
+    renderSiteList();
+    showListView();
+  });
 
   flyToSite(site);
   updateUrl();
 }
 
+function updateViewSummary() {
+  if (!formView) { fViewSummary.textContent = ""; return; }
+  fViewSummary.textContent =
+    `zoom ${formView.zoom.toFixed(1)}, bearing ${Math.round(formView.bearing)}°, pitch ${Math.round(formView.pitch)}°`;
+}
+
+function showForm(site) {
+  stopPlacing();
+  editingId = site ? site.id : null;
+  sitesListView.hidden = true;
+  siteDetailView.hidden = true;
+  airspaceListView.hidden = true;
+  siteForm.hidden = false;
+  expandPanel();
+  document.getElementById("siteFormTitle").textContent = site ? "Edit site" : "Add site";
+
+  document.getElementById("fName").value = site?.name || "";
+  document.getElementById("fArea").value = site?.area || "";
+  descriptionEditor.clipboard.dangerouslyPasteHTML(site?.description || "");
+  hazardsEditor.clipboard.dangerouslyPasteHTML(site?.hazards || "");
+  document.getElementById("fLatitude").value = site?.latitude ?? "";
+  document.getElementById("fLongitude").value = site?.longitude ?? "";
+  document.getElementById("fElevation").value = site?.elevation_m ?? "";
+
+  formSite = site || null;
+  renderMediaList();
+
+  formView = site
+    ? {
+        latitude: site.view_latitude ?? site.latitude,
+        longitude: site.view_longitude ?? site.longitude,
+        zoom: site.view_zoom ?? map.getZoom(),
+        bearing: site.view_bearing ?? 0,
+        pitch: site.view_pitch ?? 0,
+      }
+    : {
+        latitude: map.getCenter().lat,
+        longitude: map.getCenter().lng,
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      };
+  updateViewSummary();
+}
+
+function mediaTypeFromFilename(filename) {
+  switch ((filename.split(".").pop() || "").toLowerCase()) {
+    case "png": case "jpg": case "jpeg": case "gif": return "photo";
+    case "pdf": return "pdf";
+    case "gpx": return "gpx";
+    default: return null;
+  }
+}
+
+// Editable media list for the form in progress: each row shows a thumbnail
+// (photos) or kind label (PDF/GPX), a filename, and a description input
+// that saves on blur/change -- disabled until the site has been saved at
+// least once, since a photo/file needs a site id to upload under.
+function renderMediaList() {
+  const media = formSite ? (formSite.references || []).filter((r) => r.type === "photo" || r.type === "pdf" || r.type === "gpx") : [];
+  mediaList.innerHTML = media
+    .map((r) => {
+      const filename = r.url.split("/").pop();
+      const thumb = r.type === "photo"
+        ? `<img src="${escapeHtml(r.url)}" alt="" />`
+        : mediaKindLabel(r.type);
+      return `
+        <div class="media-row" data-filename="${escapeHtml(filename)}">
+          <div class="media-row-thumb">${thumb}</div>
+          <div class="media-row-body">
+            <div class="media-row-title">${escapeHtml(r.title || filename)}</div>
+            <input type="text" class="media-desc-input" placeholder="Description..." value="${escapeHtml(r.description || "")}" />
+          </div>
+          <button type="button" class="media-row-remove" title="Remove">&times;</button>
+        </div>`;
+    })
+    .join("");
+  mediaHint.hidden = !!formSite;
+  mediaInput.disabled = !formSite;
+}
+
+mediaInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || !formSite) return;
+  if (!mediaTypeFromFilename(file.name)) {
+    alert("Unsupported file type. Use PNG, JPG, PDF, or GPX.");
+    return;
+  }
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const dataBase64 = dataUrl.split(",")[1];
+  const updated = await api(`/api/sites/${formSite.id}/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, dataBase64, description: "" }),
+  });
+  formSite = updated;
+  sites = sites.map((s) => (s.id === updated.id ? updated : s));
+  renderMediaList();
+});
+
+mediaList.addEventListener("change", async (e) => {
+  if (!e.target.matches(".media-desc-input") || !formSite) return;
+  const filename = e.target.closest(".media-row").dataset.filename;
+  const updated = await api(`/api/sites/${formSite.id}/media/${encodeURIComponent(filename)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description: e.target.value }),
+  });
+  formSite = updated;
+  sites = sites.map((s) => (s.id === updated.id ? updated : s));
+});
+
+mediaList.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".media-row-remove");
+  if (!btn || !formSite) return;
+  const filename = btn.closest(".media-row").dataset.filename;
+  const updated = await api(`/api/sites/${formSite.id}/media/${encodeURIComponent(filename)}`, { method: "DELETE" });
+  formSite = updated;
+  sites = sites.map((s) => (s.id === updated.id ? updated : s));
+  renderMediaList();
+});
+
+document.getElementById("useCurrentViewBtn").addEventListener("click", () => {
+  formView = {
+    latitude: map.getCenter().lat,
+    longitude: map.getCenter().lng,
+    zoom: map.getZoom(),
+    bearing: map.getBearing(),
+    pitch: map.getPitch(),
+  };
+  updateViewSummary();
+});
+
 document.getElementById("backToListBtn").addEventListener("click", showListView);
+document.getElementById("cancelFormBtn").addEventListener("click", () => {
+  if (editingId) showDetail(editingId);
+  else showListView();
+});
+
+siteForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = {
+    name: document.getElementById("fName").value.trim(),
+    area: document.getElementById("fArea").value.trim(),
+    description: descriptionEditor.root.innerHTML,
+    hazards: hazardsEditor.root.innerHTML,
+    latitude: parseFloat(document.getElementById("fLatitude").value),
+    longitude: parseFloat(document.getElementById("fLongitude").value),
+    elevation_m: document.getElementById("fElevation").value === "" ? null : parseFloat(document.getElementById("fElevation").value),
+    view_latitude: formView.latitude,
+    view_longitude: formView.longitude,
+    view_zoom: formView.zoom,
+    view_bearing: formView.bearing,
+    view_pitch: formView.pitch,
+  };
+
+  let saved;
+  if (editingId) {
+    saved = await api(`/api/sites/${editingId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    sites = sites.map((s) => (s.id === saved.id ? saved : s));
+  } else {
+    saved = await api("/api/sites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    sites = [...sites, saved];
+  }
+  renderMarkers();
+  populateAreaFilter();
+  renderSiteList();
+  showDetail(saved.id);
+});
+
+const pickPinBtn = document.getElementById("pickPinBtn");
+
+function startPlacing(mode, bannerText) {
+  placingMode = mode;
+  placingBanner.textContent = "";
+  placingBanner.append(bannerText, " — ");
+  const cancelBtn = document.createElement("button");
+  cancelBtn.id = "cancelPlacingBtn";
+  cancelBtn.textContent = "cancel";
+  placingBanner.append(cancelBtn);
+  cancelBtn.addEventListener("click", stopPlacing);
+  placingBanner.hidden = false;
+  map.getCanvas().style.cursor = "crosshair";
+  pickPinBtn.classList.toggle("active", mode === "reposition");
+}
+
+function stopPlacing() {
+  placingMode = null;
+  placingBanner.hidden = true;
+  map.getCanvas().style.cursor = "";
+  pickPinBtn.classList.remove("active");
+}
+
+document.getElementById("addSiteBtn").addEventListener("click", () => {
+  startPlacing("new", "Click the map to place the new site");
+});
+
+pickPinBtn.addEventListener("click", () => {
+  if (placingMode === "reposition") {
+    stopPlacing();
+  } else {
+    startPlacing("reposition", "Click the map to set this site's pin");
+  }
+});
+
+map.on("click", (e) => {
+  if (!placingMode) {
+    if (!airspaceToggle.checked) computeGlideRange(e.lngLat.lng, e.lngLat.lat);
+    return;
+  }
+  const mode = placingMode;
+  stopPlacing();
+  if (mode === "new") {
+    showForm(null);
+    formView = {
+      latitude: map.getCenter().lat,
+      longitude: map.getCenter().lng,
+      zoom: map.getZoom(),
+      bearing: map.getBearing(),
+      pitch: map.getPitch(),
+    };
+    updateViewSummary();
+  }
+  document.getElementById("fLatitude").value = e.lngLat.lat.toFixed(6);
+  document.getElementById("fLongitude").value = e.lngLat.lng.toFixed(6);
+});
 
 // Applies whatever came in on the URL (see urlParams/urlSite near the top)
 // on top of the normal initial render: search text and area filter need to

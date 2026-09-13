@@ -36,6 +36,18 @@ async function handleListSites(env: Env): Promise<Response> {
   return json(sites);
 }
 
+// Public, unauthenticated read of the same sites.json the instant-publish
+// mirror (publishAllSites, see publish.ts) keeps current in PUBLIC_SITE on
+// every save -- what the public read-only viewer (worker/public/app.js)
+// fetches instead of the Access-gated /api/sites. Not just an alias for
+// handleListSites: reading the already-published snapshot avoids touching
+// LIVE_DATA (and its per-site YAML parse) on every anonymous page load.
+async function handleSitesJson(env: Env): Promise<Response> {
+  const obj = await env.PUBLIC_SITE.get("sites.json");
+  if (!obj) return json([]);
+  return new Response(obj.body, { headers: { "Content-Type": "application/json; charset=utf-8" } });
+}
+
 async function handleGetSite(env: Env, id: string): Promise<Response> {
   try {
     return json(await getSite(env.LIVE_DATA, id));
@@ -256,7 +268,9 @@ export default {
     const segments = url.pathname.split("/").filter(Boolean); // ["api","sites",...] etc.
 
     try {
-      if (segments[0] === "api" && segments[1] === "sites") {
+      if (segments.length === 1 && segments[0] === "sites.json" && method === "GET") {
+        return await handleSitesJson(env);
+      } else if (segments[0] === "api" && segments[1] === "sites") {
         if (segments.length === 2) {
           if (method === "GET") return await handleListSites(env);
           if (method === "POST") return await handleCreateSite(env, request);
