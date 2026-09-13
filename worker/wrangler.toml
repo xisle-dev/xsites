@@ -2,6 +2,14 @@ name = "xsites-editor"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
+# Custom domain -- custom_domain = true has wrangler provision and manage
+# the DNS record + SSL cert itself (Cloudflare's "Custom Domains" feature),
+# rather than a plain Route needing a separately hand-maintained DNS record.
+# See github issue #20.
+[[routes]]
+pattern = "sites.xisle.net"
+custom_domain = true
+
 # Editor frontend (index.html, app.js, style.css, logo/favicon.svg,
 # data/airspace.geojson) -- copies of the same files server/main.go used to
 # serve via http.FileServer(http.Dir(root)) -- see github issue #16. Assets
