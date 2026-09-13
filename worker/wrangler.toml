@@ -1,0 +1,20 @@
+name = "xsites-editor"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# LIVE_DATA: the live-editable source of truth (per-site YAML objects +
+# media), read/written by every /api/sites request -- see github issue #11
+# (the Workers-port roadmap) for how this replaces server/store.go's
+# r2SiteStore.
+[[r2_buckets]]
+binding = "LIVE_DATA"
+bucket_name = "xsites-live-data"
+
+# PUBLIC_SITE: the read-only static viewer's bucket (sites.json,
+# media/<id>/<file>, and the static/dist/ assets synced by
+# .github/workflows/deploy-r2.yml). The Worker only ever writes to
+# sites.json/media/* here (the instant-publish mirror, issue #18) -- never
+# touches the static code/asset files that workflow owns.
+[[r2_buckets]]
+binding = "PUBLIC_SITE"
+bucket_name = "xsites"

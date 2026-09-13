@@ -19,3 +19,6 @@ server/.r2.local.env
 # Wrangler's local cache (account info, OAuth state) from running it in this
 # directory -- machine-local, not project state.
 .wrangler/
+
+# Worker dependencies -- reinstall with: cd worker && npm install
+worker/node_modules/
