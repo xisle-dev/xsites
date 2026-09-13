@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>X/Isle Sites</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.snow.css" />
+  <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
+       (e.g. to the current unix time) whenever either file changes, since a
+       plain reload isn't reliably enough to pick up a new version. -->
+  <link rel="stylesheet" href="style.css?v=1789191661" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="panel">
+    <div id="panelHandle" class="panel-handle" aria-hidden="true"></div>
+    <div class="panel-topbar">
+      <div class="panel-topbar-row">
+        <div class="brand">
+          <img src="logo.svg" alt="" class="brand-logo" />
+          <h1>X/Sites</h1>
+        </div>
+        <div class="panel-topbar-actions">
+          <div class="zoom-controls">
+            <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          </div>
+          <div id="mapControlsMenu" class="map-controls-menu">
+            <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
+            <div id="terrainContent" class="terrain-content" hidden>
+            <div class="list-filters">
+              <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
+              <select id="areaFilter">
+                <option value="">All areas</option>
+              </select>
+            </div>
+
+            <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
+            <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
+
+            <label for="exaggeration">Terrain exaggeration: <span id="exaggerationValue">1.5</span>&times;</label>
+            <input type="range" id="exaggeration" min="0.5" max="4" step="0.1" value="1.5" />
+
+            <div class="airspace-controls">
+              <label class="airspace-toggle-row">
+                <input type="checkbox" id="airspaceToggle" />
+                <span>Show airspace</span>
+              </label>
+              <div id="airspaceLegend" class="airspace-legend">
+                <label><input type="checkbox" data-airspace-class="B" /> <span class="swatch" style="background:#3b82f6"></span> Class B</label>
+                <label><input type="checkbox" data-airspace-class="C" checked /> <span class="swatch" style="background:#ec4899"></span> Class C</label>
+                <label><input type="checkbox" data-airspace-class="D" checked /> <span class="swatch" style="background:#22d3ee"></span> Class D</label>
+                <label><input type="checkbox" data-airspace-class="E" checked /> <span class="swatch" style="background:#a78bfa"></span> Class E</label>
+                <label><input type="checkbox" data-airspace-class="F" checked /> <span class="swatch" style="background:#f97316"></span> Class F (advisory)</label>
+                <label><input type="checkbox" data-airspace-class="SUA" checked /> <span class="swatch" style="background:#ef4444"></span> Restricted / danger</label>
+              </div>
+              <div class="airspace-attribution">
+                Airspace data &copy; <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors, CC BY-NC 4.0. Not for navigation.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+      <div class="topbar-search">
+        <input type="text" id="placeSearch" placeholder="Search places..." autocomplete="off" />
+        <div id="placeSuggestions" class="place-suggestions" hidden></div>
+      </div>
+    </div>
+
+    <div id="sitesListView">
+      <div class="sites-header">
+        <h2>Sites</h2>
+        <button id="addSiteBtn" title="Add a new site">+ Add</button>
+      </div>
+      <div id="siteList"></div>
+    </div>
+
+    <div id="siteDetailView" hidden>
+      <div class="sites-header">
+        <button id="backToListBtn" class="link-btn">&larr; Back</button>
+      </div>
+      <div id="siteDetailContent"></div>
+    </div>
+
+    <div id="airspaceListView" hidden>
+      <div class="sites-header">
+        <button id="airspaceBackBtn" class="link-btn">&larr; Back</button>
+        <h2>Airspace</h2>
+      </div>
+      <div id="airspaceEntries"></div>
+    </div>
+
+    <form id="siteForm" hidden>
+      <div class="sites-header">
+        <h2 id="siteFormTitle">Add site</h2>
+        <button type="button" id="cancelFormBtn" class="link-btn">Cancel</button>
+      </div>
+
+      <label for="fName">Name</label>
+      <input type="text" id="fName" required />
+
+      <label for="fArea">Area</label>
+      <input type="text" id="fArea" />
+
+      <label>Description</label>
+      <div class="rte"><div id="fDescription"></div></div>
+
+      <label>Hazards</label>
+      <div class="rte"><div id="fHazards"></div></div>
+
+      <div class="field-row">
+        <div>
+          <label for="fLatitude">Latitude</label>
+          <input type="number" step="any" id="fLatitude" required />
+        </div>
+        <div>
+          <label for="fLongitude">Longitude</label>
+          <input type="number" step="any" id="fLongitude" required />
+        </div>
+      </div>
+      <button type="button" id="pickPinBtn">Click map to set pin</button>
+
+      <label for="fElevation">Elevation (m)</label>
+      <input type="number" step="1" id="fElevation" />
+
+      <p class="hint">Camera preset (used for "Fly here"):</p>
+      <button type="button" id="useCurrentViewBtn">Use current map view</button>
+      <div id="fViewSummary" class="hint"></div>
+
+      <div class="section-label">Media</div>
+      <div class="media-list" id="mediaList"></div>
+      <input type="file" id="mediaInput" accept=".png,.jpg,.jpeg,.pdf,.gpx" />
+      <p class="hint" id="mediaHint" hidden>Save the site first to add photos, PDFs, or GPX tracks.</p>
+
+      <div class="buttons">
+        <button type="submit" id="saveSiteBtn">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="placingBanner" hidden></div>
+  <div id="glideLegend" class="glide-legend" hidden></div>
+  <div id="glideHoverTip" class="glide-hover-tip" hidden></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
+  <script type="module" src="app.js?v=1789194906"></script>
+</body>
+</html>

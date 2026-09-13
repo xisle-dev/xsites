@@ -2,6 +2,14 @@ name = "xsites-editor"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
+# Editor frontend (index.html, app.js, style.css, logo/favicon.svg,
+# data/airspace.geojson) -- copies of the same files server/main.go used to
+# serve via http.FileServer(http.Dir(root)) -- see github issue #16. Assets
+# are matched first; anything that doesn't match a file here (/api/*,
+# /media/*) falls through to the Worker script below.
+[assets]
+directory = "./public"
+
 # LIVE_DATA: the live-editable source of truth (per-site YAML objects +
 # media), read/written by every /api/sites request -- see github issue #11
 # (the Workers-port roadmap) for how this replaces server/store.go's
