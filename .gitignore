@@ -22,3 +22,7 @@ server/.r2.local.env
 
 # Worker dependencies -- reinstall with: cd worker && npm install
 worker/node_modules/
+
+# One-off Cloudflare API token (Access: Apps and Policies edit) used to
+# script the Zero Trust setup in Phase H -- never committed.
+worker/.cf-access-admin-token
