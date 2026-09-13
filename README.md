@@ -184,6 +184,11 @@ zero VM patching/maintenance).
 
 ### Initial setup (one-time)
 
+0. **Use a dedicated GCP project** (`xsites-editor`, not shared with
+   anything else): `gcloud projects create xsites-editor` then
+   `gcloud billing projects link xsites-editor --billing-account=<id>`.
+   Keeps this app's resources, IAM, and billing cleanly separated from
+   whatever else might be running on the same Google account.
 1. **R2 bucket + credentials for live data** — separate from the static
    site's bucket (below), since the two need different lifecycles: Cloudflare
    dashboard → R2 → Create bucket, then R2 → Manage API Tokens → Create API
