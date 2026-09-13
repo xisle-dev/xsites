@@ -15,6 +15,7 @@ import {
   MediaNotFoundError,
 } from "./store";
 import { handleTileRequest } from "./tiles";
+import { publishAllSites, publishMedia, publishDeleteMedia, publishDeleteSiteMedia } from "./publish";
 
 export interface Env {
   LIVE_DATA: R2Bucket;
@@ -70,6 +71,7 @@ async function handleCreateSite(env: Env, request: Request): Promise<Response> {
   };
   applySiteInput(site, input);
   await saveSite(env.LIVE_DATA, site);
+  await publishAllSites(env.LIVE_DATA, env.PUBLIC_SITE);
   return json(await getSite(env.LIVE_DATA, id), 201);
 }
 
@@ -89,6 +91,7 @@ async function handleUpdateSite(env: Env, id: string, request: Request): Promise
   }
   applySiteInput(site, input);
   await saveSite(env.LIVE_DATA, site);
+  await publishAllSites(env.LIVE_DATA, env.PUBLIC_SITE);
   return json(await getSite(env.LIVE_DATA, id));
 }
 
@@ -100,6 +103,8 @@ async function handleDeleteSite(env: Env, id: string): Promise<Response> {
     throw err;
   }
   await deleteSite(env.LIVE_DATA, id);
+  await publishDeleteSiteMedia(env.PUBLIC_SITE, id);
+  await publishAllSites(env.LIVE_DATA, env.PUBLIC_SITE);
   return json({ ok: true });
 }
 
@@ -162,6 +167,7 @@ async function handleUploadMedia(env: Env, id: string, request: Request): Promis
     return errorResponse(400, "invalid dataBase64");
   }
   await saveMedia(env.LIVE_DATA, id, filename, data);
+  await publishMedia(env.PUBLIC_SITE, id, filename, data);
 
   const newRef: Reference = {
     type: mediaType,
@@ -177,6 +183,7 @@ async function handleUploadMedia(env: Env, id: string, request: Request): Promis
   else site.references.push(newRef);
 
   await saveSite(env.LIVE_DATA, site);
+  await publishAllSites(env.LIVE_DATA, env.PUBLIC_SITE);
   return json(await getSite(env.LIVE_DATA, id), 201);
 }
 
@@ -203,6 +210,7 @@ async function handleUpdateMedia(env: Env, id: string, filename: string, request
   }
   if (!found) return errorResponse(404, "media not found");
   await saveSite(env.LIVE_DATA, site);
+  await publishAllSites(env.LIVE_DATA, env.PUBLIC_SITE);
   return json(await getSite(env.LIVE_DATA, id));
 }
 
@@ -221,8 +229,11 @@ async function handleDeleteMedia(env: Env, id: string, filename: string): Promis
   } catch (err) {
     if (!(err instanceof MediaNotFoundError)) throw err;
   }
+  await publishDeleteMedia(env.PUBLIC_SITE, id, filename);
+
   site.references = site.references.filter((ref) => !ref.url.endsWith("/" + filename));
   await saveSite(env.LIVE_DATA, site);
+  await publishAllSites(env.LIVE_DATA, env.PUBLIC_SITE);
   return json(await getSite(env.LIVE_DATA, id));
 }
 
