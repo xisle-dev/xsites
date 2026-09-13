@@ -1,0 +1,17 @@
+# Keep the build context (what gets uploaded to Cloud Build / the local
+# Docker daemon) down to what the Dockerfile actually COPYs -- everything
+# else here just slows the upload down or, worse, could leak local secrets.
+.git/
+.github/
+.claude/
+.wrangler/
+scratch_rasp_test/
+sites/
+static/
+tools/
+dist/
+node_modules/
+*.exe
+*.exe~
+*.log
+server/.r2.local.env
