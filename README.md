@@ -10,17 +10,22 @@ Worker) for managing the site database.
 The app ships in two independent modes that share the same map code and data
 format but nothing at runtime:
 
-- **Dynamic** — a Cloudflare Worker (`worker/`) with full read/write CRUD,
-  gated by Cloudflare Access. Site data and media live in a Cloudflare R2
-  bucket, read/written directly via a native R2 binding (no S3 SDK, no
-  credentials in the data path) -- see **Live editing (Cloudflare Workers)**
-  below.
-- **Static** — a read-only mirror (`static/` + `tools/buildstatic`) deployed
-  to a second Cloudflare R2 bucket, rebuilt and synced automatically on every
-  push via GitHub Actions. Since the Worker publishes straight into this same
-  bucket on every save (see **Instant publish**), the two together mean a
-  site edit is live on the public site within seconds, without waiting on a
-  GitHub Actions run.
+- **Dynamic** — a Cloudflare Worker (`worker/`) serving a public read-only
+  viewer at `/` and the full read/write CRUD editor at `/admin` (only
+  `/admin` and `/api` sit behind Cloudflare Access -- see **Live editing
+  (Cloudflare Workers)** below). Site data and media live in a Cloudflare
+  R2 bucket, read/written directly via a native R2 binding (no S3 SDK, no
+  credentials in the data path).
+- **Static** — a *separate* read-only mirror (`static/` + `tools/buildstatic`)
+  deployed to the same public R2 bucket the Worker's own public viewer reads
+  from, rebuilt and synced automatically on every push via GitHub Actions.
+  This exists independently of the Worker's `/` route above -- a fully
+  static, CDN-cacheable fallback that needs no Worker at all (e.g. for a
+  separate hostname or a disaster-recovery mirror), sharing the same bucket
+  and `sites.json`/`media/*` shape by design. Since the Worker publishes
+  straight into this same bucket on every save (see **Instant publish**),
+  both the Worker's own `/` and this static mirror reflect an edit within
+  seconds, without waiting on a GitHub Actions run.
 
 Everything -- compute, storage, DNS, and auth -- runs on Cloudflare. There is
 no other cloud provider involved; an earlier iteration of the dynamic mode
@@ -127,12 +132,21 @@ from different places:
 
 ### Dynamic mode
 
-`worker/src/index.ts` is a single Cloudflare Worker serving the editor
-frontend (`worker/public/`, via Workers Assets), the `/api/sites` CRUD JSON
-API, `/media/<id>/<file>` for site photos, and `/tiles/*` vector tiles read
-straight out of R2. This is the only mode with write access, gated by
-Cloudflare Access (email one-time-PIN, no external identity provider) --
-see **Live editing (Cloudflare Workers)** below.
+`worker/src/index.ts` is a single Cloudflare Worker serving (via Workers
+Assets):
+
+- `worker/public/` at `/` — a public, unauthenticated read-only viewer
+  (adapted from `static/`'s app, see **Static mode** below), reading site
+  data from `GET /sites.json` (the same object the instant-publish mirror
+  keeps current, not a live `/api/sites` call) and labels from the Worker's
+  own `/tiles/*` route.
+- `worker/public/admin/` at `/admin` — the full read/write CRUD editor.
+
+`/api/sites` (CRUD JSON), `/media/<id>/<file>` (site photos), and `/tiles/*`
+(vector tiles read straight out of R2) are also part of the Worker; the
+public viewer above only ever hits the latter two. `/admin` and `/api` are
+the only paths gated by Cloudflare Access (email one-time-PIN, no external
+identity provider) -- see **Live editing (Cloudflare Workers)** below.
 
 Every write also best-effort mirrors into the *public* static-site bucket
 (`worker/src/publish.ts`) so edits show up on the live site immediately --
@@ -187,12 +201,13 @@ go build -o localserve .
 
 ## Live editing (Cloudflare Workers)
 
-The dynamic app runs as a Cloudflare Worker (`worker/`), gated by Cloudflare
-Access (email one-time-PIN) so only allowlisted addresses can reach it.
-Compute, storage, DNS, and auth are all Cloudflare-native -- see github issue
-#11 for the full phased migration this came from (replacing an earlier Cloud
-Run + IAP setup that couldn't be scripted end-to-end for a personal Google
-account).
+The dynamic app runs as a Cloudflare Worker (`worker/`). `/` is public and
+read-only; `/admin` (the full CRUD editor) and `/api` are gated by
+Cloudflare Access (email one-time-PIN) so only allowlisted addresses can
+reach them. Compute, storage, DNS, and auth are all Cloudflare-native -- see
+github issue #11 for the full phased migration this came from (replacing an
+earlier Cloud Run + IAP setup that couldn't be scripted end-to-end for a
+personal Google account).
 
 ### Initial setup (one-time)
 
@@ -231,7 +246,10 @@ account).
    Organizations, Identity Providers, and Groups: Edit" (My Profile → API
    Tokens → Create Token). The script creates (or updates, if re-run) the
    email one-time-PIN login method, a self-hosted Access application for the
-   domain, and an allow policy for the given emails.
+   domain, and an allow policy for the given emails. By default it scopes
+   the application to just `<domain>/admin*` and `<domain>/api*` (matching
+   the public/admin split above) -- pass `--paths ""` before the domain to
+   protect the whole hostname instead.
 6. **Set up instant publish** -- nothing extra to do here; `worker/src/publish.ts`
    always mirrors into the `xsites` bucket via its own R2 binding, unlike the
    old Cloud Run setup which needed a second set of credentials to make this
@@ -356,5 +374,10 @@ R2 buckets (see **Live editing** step 2 and **Deploy** step 6).
   stale cached copy of one and not the other across edits (mismatched
   JS/CSS versions), badly enough that even a manual hard refresh didn't
   reliably fix it. Bump both `?v=` values (e.g. to the current unix time)
-  whenever `app.js` or `style.css` changes -- for the Worker, also copy the
-  changed file(s) into `worker/public/` before deploying.
+  whenever `app.js` or `style.css` changes.
+- `worker/public/` (the public read-only viewer, adapted from `static/`)
+  and `worker/public/admin/` (the full editor, copied from the repo root)
+  are their own files, not symlinks -- editing `app.js`/`style.css`/etc. at
+  the repo root or in `static/` doesn't automatically update them. Copy the
+  changed file(s) into the matching `worker/public/` location (and bump its
+  own `?v=`) before running `wrangler deploy`.
