@@ -4,10 +4,12 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
+	"io"
 	"log"
 	"mime"
 	"net/http"
@@ -21,14 +23,26 @@ import (
 
 var sitesDir string
 
-// store backs the read path only (GET /api/sites, GET /api/sites/{id}) --
-// see store.go. Every write handler below still goes straight at sitesDir
-// on the local filesystem; that moves behind this same abstraction in
-// Phase 4 (issue #5).
+// store is where all site data and media actually live -- see store.go.
 var store SiteStore
 
+// publisher best-effort mirrors edits into the public static-site bucket --
+// see publish.go. nil (and every call on it a no-op) until R2_PUBLIC_* is
+// configured.
+var publisher *publicPublisher
+
+// defaultPort respects Cloud Run's convention of injecting the port to
+// listen on via $PORT (see server/Dockerfile) rather than requiring an
+// explicit -port on every deploy; local dev still just gets 8933.
+func defaultPort() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8933"
+}
+
 func main() {
-	port := flag.String("port", "8933", "HTTP port")
+	port := flag.String("port", defaultPort(), "HTTP port")
 	host := flag.String("host", "127.0.0.1", "Bind address (use 0.0.0.0 to accept connections from outside localhost, e.g. from other containers)")
 	root := flag.String("root", ".", "Project root to serve static files from")
 	storeKind := flag.String("store", "local", "Where GET /api/sites reads from: \"local\" (sites/*.yaml under -root) or \"r2\" (see README for required R2_* environment variables)")
@@ -52,6 +66,7 @@ func main() {
 	default:
 		log.Fatalf("unknown -store %q (want \"local\" or \"r2\")", *storeKind)
 	}
+	publisher = newPublicPublisherFromEnv()
 
 	for ext, ct := range map[string]string{
 		".html": "text/html; charset=utf-8",
@@ -79,7 +94,7 @@ func main() {
 	mux.HandleFunc("POST /api/sites/{id}/media", handleUploadMedia)
 	mux.HandleFunc("PUT /api/sites/{id}/media/{filename}", handleUpdateMedia)
 	mux.HandleFunc("DELETE /api/sites/{id}/media/{filename}", handleDeleteMedia)
-	mux.HandleFunc("GET /media/{id}/{rest...}", handleMedia(absRoot))
+	mux.HandleFunc("GET /media/{id}/{rest...}", handleMedia)
 
 	// Vector label tiles (Protomaps basemap extract) -- same tile-serving
 	// code as the go-pmtiles CLI's own `serve` command, embedded here so
@@ -112,17 +127,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func siteYamlPath(id string) string {
-	return siteYamlPathIn(sitesDir, id)
-}
-
 func siteYamlPathIn(dir, id string) string {
 	return filepath.Join(dir, id+".yaml")
-}
-
-func siteExists(id string) bool {
-	_, err := os.Stat(siteYamlPath(id))
-	return err == nil
 }
 
 func handleListSites(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +155,23 @@ func handleGetSite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, site)
 }
 
+// publishAllSites refreshes the public bucket's sites.json from the current
+// full site list -- a no-op if publisher isn't configured (see publish.go).
+// Called after every mutation that changes what /api/sites would return,
+// same set of call sites as store.SaveSite/DeleteSite below.
+func publishAllSites(ctx context.Context) {
+	if publisher == nil {
+		return
+	}
+	sites, err := store.GetAllSites(ctx)
+	if err != nil {
+		log.Printf("[publish] refreshing sites.json: %v", err)
+		return
+	}
+	sort.Slice(sites, func(i, j int) bool { return sites[i].ID < sites[j].ID })
+	publisher.publishSites(ctx, sites)
+}
+
 func handleCreateSite(w http.ResponseWriter, r *http.Request) {
 	var in SiteInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -159,25 +182,30 @@ func handleCreateSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name is required")
 		return
 	}
-	id := newUniqueSiteID(sitesDir, *in.Name)
-	site := Site{ID: id, References: []Reference{}}
-	applySiteInput(&site, in)
-	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
+	id, err := uniqueSiteID(r.Context(), store, *in.Name)
+	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	saved, _ := readSiteYaml(siteYamlPath(id), id)
+	site := Site{ID: id, References: []Reference{}}
+	applySiteInput(&site, in)
+	if err := store.SaveSite(r.Context(), site); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	publishAllSites(r.Context())
+	saved, _ := store.GetSite(r.Context(), id)
 	writeJSON(w, 201, saved)
 }
 
 func handleUpdateSite(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !siteExists(id) {
-		writeError(w, 404, "not found")
-		return
-	}
-	site, err := readSiteYaml(siteYamlPath(id), id)
+	site, err := store.GetSite(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, ErrSiteNotFound) {
+			writeError(w, 404, "not found")
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -187,25 +215,33 @@ func handleUpdateSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	applySiteInput(&site, in)
-	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
+	if err := store.SaveSite(r.Context(), site); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	saved, _ := readSiteYaml(siteYamlPath(id), id)
+	publishAllSites(r.Context())
+	saved, _ := store.GetSite(r.Context(), id)
 	writeJSON(w, 200, saved)
 }
 
 func handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !siteExists(id) {
-		writeError(w, 404, "not found")
-		return
-	}
-	if err := os.Remove(siteYamlPath(id)); err != nil {
+	if _, err := store.GetSite(r.Context(), id); err != nil {
+		if errors.Is(err, ErrSiteNotFound) {
+			writeError(w, 404, "not found")
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
-	_ = os.RemoveAll(filepath.Join(sitesDir, id))
+	if err := store.DeleteSite(r.Context(), id); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if publisher != nil {
+		publisher.deleteSiteMedia(r.Context(), id)
+	}
+	publishAllSites(r.Context())
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -234,8 +270,13 @@ func mediaTypeForFilename(filename string) string {
 
 func handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !siteExists(id) {
-		writeError(w, 404, "not found")
+	site, err := store.GetSite(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrSiteNotFound) {
+			writeError(w, 404, "not found")
+			return
+		}
+		writeError(w, 500, err.Error())
 		return
 	}
 	var body mediaUploadBody
@@ -254,21 +295,14 @@ func handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid dataBase64")
 		return
 	}
-	mediaDir := filepath.Join(sitesDir, id, "media")
-	if err := os.MkdirAll(mediaDir, 0755); err != nil {
+	if err := store.SaveMedia(r.Context(), id, filename, data); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	if err := os.WriteFile(filepath.Join(mediaDir, filename), data, 0644); err != nil {
-		writeError(w, 500, err.Error())
-		return
+	if publisher != nil {
+		publisher.publishMedia(r.Context(), id, filename, data)
 	}
 
-	site, err := readSiteYaml(siteYamlPath(id), id)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
 	newRef := Reference{
 		Type:        mediaType,
 		Title:       filename,
@@ -289,11 +323,12 @@ func handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 	if !replaced {
 		site.References = append(site.References, newRef)
 	}
-	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
+	if err := store.SaveSite(r.Context(), site); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	saved, _ := readSiteYaml(siteYamlPath(id), id)
+	publishAllSites(r.Context())
+	saved, _ := store.GetSite(r.Context(), id)
 	writeJSON(w, 201, saved)
 }
 
@@ -304,18 +339,18 @@ type mediaUpdateBody struct {
 func handleUpdateMedia(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	filename := r.PathValue("filename")
-	if !siteExists(id) {
-		writeError(w, 404, "not found")
+	site, err := store.GetSite(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrSiteNotFound) {
+			writeError(w, 404, "not found")
+			return
+		}
+		writeError(w, 500, err.Error())
 		return
 	}
 	var body mediaUpdateBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid JSON body")
-		return
-	}
-	site, err := readSiteYaml(siteYamlPath(id), id)
-	if err != nil {
-		writeError(w, 500, err.Error())
 		return
 	}
 	found := false
@@ -329,29 +364,38 @@ func handleUpdateMedia(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "media not found")
 		return
 	}
-	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
+	if err := store.SaveSite(r.Context(), site); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	saved, _ := readSiteYaml(siteYamlPath(id), id)
+	publishAllSites(r.Context())
+	saved, _ := store.GetSite(r.Context(), id)
 	writeJSON(w, 200, saved)
 }
 
 func handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	filename := r.PathValue("filename")
-	if !siteExists(id) {
-		writeError(w, 404, "not found")
-		return
-	}
-	mediaPath := filepath.Join(sitesDir, id, "media", filepath.Base(filename))
-	_ = os.Remove(mediaPath)
-
-	site, err := readSiteYaml(siteYamlPath(id), id)
+	site, err := store.GetSite(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, ErrSiteNotFound) {
+			writeError(w, 404, "not found")
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
+	// Best-effort: if the underlying file/object is already gone, still
+	// proceed to drop the reference below, matching the previous behavior
+	// of ignoring os.Remove's error entirely.
+	if err := store.DeleteMedia(r.Context(), id, filename); err != nil && !errors.Is(err, ErrMediaNotFound) {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if publisher != nil {
+		publisher.deleteMedia(r.Context(), id, filename)
+	}
+
 	kept := site.References[:0]
 	for _, ref := range site.References {
 		if !strings.HasSuffix(ref.URL, "/"+filename) {
@@ -359,26 +403,28 @@ func handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	site.References = kept
-	if err := writeSiteYaml(site, siteYamlPath(id)); err != nil {
+	if err := store.SaveSite(r.Context(), site); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	saved, _ := readSiteYaml(siteYamlPath(id), id)
+	publishAllSites(r.Context())
+	saved, _ := store.GetSite(r.Context(), id)
 	writeJSON(w, 200, saved)
 }
 
-func handleMedia(root string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		rest := r.PathValue("rest")
-		mediaDir := filepath.Join(root, "sites", id, "media")
-		full := filepath.Join(mediaDir, filepath.FromSlash(rest))
-		// filepath.Join cleans ".." segments lexically, so guard against the
-		// result escaping mediaDir (id/rest both come straight from the URL).
-		if full != mediaDir && !strings.HasPrefix(full, mediaDir+string(filepath.Separator)) {
+func handleMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	filename := r.PathValue("rest")
+	body, contentType, err := store.GetMedia(r.Context(), id, filename)
+	if err != nil {
+		if errors.Is(err, ErrMediaNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		http.ServeFile(w, r, full)
+		writeError(w, 500, err.Error())
+		return
 	}
+	defer body.Close()
+	w.Header().Set("Content-Type", contentType)
+	_, _ = io.Copy(w, body)
 }

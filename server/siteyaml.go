@@ -239,6 +239,14 @@ func formatNum(v float64) string {
 }
 
 func writeSiteYaml(site Site, path string) error {
+	return os.WriteFile(path, renderSiteYaml(site), 0644)
+}
+
+// renderSiteYaml is the write side of writeSiteYaml split out from the
+// local file write, so a SiteStore backed by something other than the
+// local filesystem (see store.go) can get the same bytes without
+// duplicating this renderer.
+func renderSiteYaml(site Site) []byte {
 	var b strings.Builder
 	b.WriteString("name: " + yamlScalar(site.Name) + "\n")
 	b.WriteString("area: " + yamlScalar(site.Area) + "\n")
@@ -267,7 +275,7 @@ func writeSiteYaml(site Site, path string) error {
 			b.WriteString("      url: " + yamlScalar(r.URL) + "\n")
 		}
 	}
-	return os.WriteFile(path, []byte(b.String()), 0644)
+	return []byte(b.String())
 }
 
 var slugNonAlnumRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -279,17 +287,6 @@ func slugify(name string) string {
 		s = "site"
 	}
 	return s
-}
-
-func newUniqueSiteID(sitesDir, name string) string {
-	base := slugify(name)
-	id := base
-	for n := 2; ; n++ {
-		if _, err := os.Stat(filepath.Join(sitesDir, id+".yaml")); os.IsNotExist(err) {
-			return id
-		}
-		id = base + "-" + strconv.Itoa(n)
-	}
 }
 
 func getAllSites(sitesDir string) ([]Site, error) {
