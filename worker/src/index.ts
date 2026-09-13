@@ -14,6 +14,7 @@ import {
   SiteNotFoundError,
   MediaNotFoundError,
 } from "./store";
+import { handleTileRequest } from "./tiles";
 
 export interface Env {
   LIVE_DATA: R2Bucket;
@@ -263,6 +264,9 @@ export default {
         }
       } else if (segments[0] === "media" && segments.length === 3 && method === "GET") {
         return await handleGetMedia(env, segments[1], segments[2]);
+      } else if (segments[0] === "tiles" && method === "GET") {
+        const tileResponse = await handleTileRequest(request, env);
+        if (tileResponse) return tileResponse;
       }
     } catch (err) {
       return errorResponse(500, err instanceof Error ? err.message : String(err));
