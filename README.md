@@ -10,11 +10,17 @@ server) for managing the site database in `sites/*.yaml`.
 The app ships in two independent modes that share the same map code and data
 format but nothing at runtime:
 
-- **Dynamic** — a Go server (`server/`) with full read/write CRUD, currently
-  deployed on a GCP VM.
+- **Dynamic** — a Go server (`server/`) with full read/write CRUD, deployed
+  as a container on Google Cloud Run, gated by Cloud Run's Identity-Aware
+  Proxy. Site data and media live in a Cloudflare R2 bucket (`SiteStore` in
+  `server/store.go`), not on local disk -- see **Live editing on Cloud Run**
+  below.
 - **Static** — a read-only mirror (`static/` + `tools/buildstatic`) deployed
   to Cloudflare R2, rebuilt and synced automatically on every push via
-  GitHub Actions.
+  GitHub Actions. Since the dynamic app publishes straight into this same
+  bucket on every save (see **Instant publish**), the two together mean a
+  site edit is live on the public site within seconds, without waiting on a
+  GitHub Actions run.
 
 ### Map rendering (both modes)
 
@@ -38,8 +44,8 @@ format but nothing at runtime:
   upright at any bearing, unlike Google's raster labels. The two modes read
   the same `.pmtiles` archive differently:
   - *Dynamic*: served locally over HTTP by the Go server's embedded
-    go-pmtiles tile server, from `tiles/labels-vancouver-island.pmtiles` on
-    the VM's disk (`/tiles/labels-vancouver-island/{z}/{x}/{y}.mvt`).
+    go-pmtiles tile server, from `tiles/labels-vancouver-island.pmtiles`
+    baked into the container image (`/tiles/labels-vancouver-island/{z}/{x}/{y}.mvt`).
   - *Static*: read directly out of the `.pmtiles` archive in the R2 bucket
     via HTTP range requests, using the `pmtiles` JS library's own
     `pmtiles://` protocol handler — no server involved at all.
@@ -82,21 +88,45 @@ format but nothing at runtime:
 
 ### Site data
 
-`sites/<id>.yaml` — one file per launch site, in a small hand-rolled
-flat-scalar YAML dialect (not general YAML; see `server/siteyaml.go`'s
-header comment) covering name, area, description/hazards (rich text),
-lat/lon, elevation, a saved camera preset for "Fly here", and a list of
-reference links. Site photos live alongside at `sites/<id>/media/*`. There is
-no database — the yaml directory *is* the source of truth in both modes.
+Each launch site is one record covering name, area, description/hazards
+(rich text), lat/lon, elevation, a saved camera preset for "Fly here", and a
+list of reference links (photos, PDFs, GPX tracks). The two modes read it
+from different places:
+
+- **Dynamic mode's live source of truth** is a Cloudflare R2 bucket
+  (`server/store.go`'s `r2SiteStore`), one object per site at
+  `sites/<id>.yaml` plus media at `sites/<id>/media/<filename>`, using the
+  same small hand-rolled flat-scalar YAML dialect described below. All
+  reads and writes from the Cloud Run editor go here, not to any local
+  disk.
+- **`sites/<id>.yaml` in this repo** (plus `sites/<id>/media/*` alongside)
+  is that same flat-scalar YAML dialect (not general YAML; see
+  `server/siteyaml.go`'s header comment), and is what `tools/buildstatic`
+  reads for the static build. It's also what local dev's `-store=local`
+  reads/writes (see **Running it**) -- but once the R2 store is the real
+  editor's backend, these files are a point-in-time snapshot (from Phase 3
+  of the Cloud Run migration, see github issue #1), not a live mirror of
+  R2. Don't expect them to stay in sync with real edits made through the
+  deployed editor.
 
 ### Dynamic mode
 
-`server/main.go` builds a single Go binary that serves everything on one
-port: the frontend's static files, the `/api/sites` CRUD JSON API (reading
-and writing `sites/*.yaml` directly), `/media/<id>/<file>` for site photos,
-and `/tiles/*` vector tiles via an embedded go-pmtiles server. This is the
-only mode with write access — adding, editing, or deleting a site or photo
-through the UI persists straight to the yaml files on the VM's disk.
+`server/main.go` builds a single Go binary serving the editor frontend, the
+`/api/sites` CRUD JSON API, `/media/<id>/<file>` for site photos, and
+`/tiles/*` vector tiles via an embedded go-pmtiles server. This is the only
+mode with write access. A `-store` flag selects where reads and writes
+actually go:
+
+- `-store=r2` (what Cloud Run runs) — Cloudflare R2, via its S3-compatible
+  API. Needs `R2_ACCOUNT_ID`, `R2_LIVE_ACCESS_KEY_ID`,
+  `R2_LIVE_SECRET_ACCESS_KEY`, `R2_LIVE_BUCKET_NAME` set (Cloud Run gets
+  these from Secret Manager; see **Live editing on Cloud Run**).
+- `-store=local` (the default, for local dev) — `sites/*.yaml` under
+  `-root`, exactly like the original design.
+
+Every write also best-effort mirrors into the *public* static-site bucket
+(`server/publish.go`) so edits show up on the live site immediately --
+see **Instant publish**.
 
 ### Static mode
 
@@ -121,7 +151,8 @@ uploaded to the bucket by hand instead.
 ## Running it
 
 Build and run the server (serves the static frontend, the `/api/sites` CRUD
-API, and `/tiles/*` vector tiles, all on one port):
+API, and `/tiles/*` vector tiles, all on one port). By default this reads
+and writes `sites/*.yaml` on local disk (`-store=local`):
 
 ```powershell
 cd server
@@ -131,14 +162,116 @@ go build -o xsite-server.exe .
 
 Then open http://localhost:8933.
 
-## Deploy
+To run locally against the real R2-backed live data instead (useful for
+testing changes to `server/store.go` or `server/publish.go` before
+deploying), put the credentials in a git-ignored `server/.r2.local.env`
+(see **Live editing on Cloud Run** for where they come from) and:
 
-The dynamic app deploys as the `xsite-server` binary above run on a GCP VM
-(build for Linux with `GOOS=linux GOARCH=amd64 go build ...` and copy it
-over). This section covers the static mode's deploy to Cloudflare R2, which
-is the one that's automated.
+```bash
+cd server
+set -a; source .r2.local.env; set +a
+./xsite-server.exe -port=8933 -root=.. -store=r2
+```
 
-### Initial setup
+## Live editing on Cloud Run
+
+The dynamic app runs as a container on Google Cloud Run (`Dockerfile` at the
+repo root), gated by Cloud Run's Identity-Aware Proxy (IAP) so only
+allowlisted Google accounts can reach it -- see github issue #1 for the
+full phased migration this came from (Cloud Run + R2 storage instead of a
+VM with local disk, chosen for the free tier's scale-to-zero pricing and
+zero VM patching/maintenance).
+
+### Initial setup (one-time)
+
+1. **R2 bucket + credentials for live data** — separate from the static
+   site's bucket (below), since the two need different lifecycles: Cloudflare
+   dashboard → R2 → Create bucket, then R2 → Manage API Tokens → Create API
+   Token with Object Read & Write scoped to just that bucket.
+2. **Enable the required GCP APIs** on your project: Cloud Run, Artifact
+   Registry, Cloud Build, Secret Manager, IAP.
+   ```bash
+   gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
+     cloudbuild.googleapis.com secretmanager.googleapis.com iap.googleapis.com
+   ```
+3. **Create an Artifact Registry repo** for the image:
+   ```bash
+   gcloud artifacts repositories create xsites --repository-format=docker --location=us-west1
+   ```
+4. **Store the R2 credentials in Secret Manager** (never as plain env vars):
+   `r2-account-id`, `r2-live-access-key-id`, `r2-live-secret-access-key`,
+   `r2-live-bucket-name`. Grant the Cloud Run service account
+   (`<project-number>-compute@developer.gserviceaccount.com`)
+   `roles/secretmanager.secretAccessor` on each one.
+5. **Build the image** (no local Docker needed -- this uses Cloud Build):
+   ```bash
+   gcloud builds submit --tag=us-west1-docker.pkg.dev/<project>/xsites/editor:latest
+   ```
+   Note: this repo's `.gitignore` excludes `tiles/*.pmtiles` (too big for
+   git), but the Dockerfile needs the real file baked into the image --
+   that's what the separate `.gcloudignore` at the repo root is for
+   (it deliberately does *not* defer to `.gitignore` the way gcloud's
+   default ignore behavior does).
+6. **Deploy**, with public access off until IAP is confirmed working:
+   ```bash
+   gcloud run deploy xsites-editor \
+     --image=us-west1-docker.pkg.dev/<project>/xsites/editor:latest \
+     --region=us-west1 --no-allow-unauthenticated --max-instances=3 \
+     --set-secrets=R2_ACCOUNT_ID=r2-account-id:latest,R2_LIVE_ACCESS_KEY_ID=r2-live-access-key-id:latest,R2_LIVE_SECRET_ACCESS_KEY=r2-live-secret-access-key:latest,R2_LIVE_BUCKET_NAME=r2-live-bucket-name:latest
+   ```
+7. **Enable IAP and allowlist accounts.** `gcloud run services update
+   xsites-editor --region=<region> --iap` enables it, but **for a personal
+   (non-Google-Workspace) project this needs one manual step first**: the
+   IAP OAuth brand/client APIs require the project to belong to an
+   organization, so a personal Google account project has to configure the
+   OAuth consent screen once through Cloud Console → APIs & Services → OAuth
+   consent screen (or the Cloud Run service's Security tab → IAP) before IAP
+   will actually present a sign-in screen instead of "Empty Google Account
+   OAuth client ID(s)/secret(s)". After that one-time setup, allowlist
+   accounts with:
+   ```bash
+   gcloud run services add-iam-policy-binding xsites-editor --region=<region> \
+     --member=user:<email> --role=roles/run.invoker
+   ```
+8. **(Optional but recommended) Set a billing budget alert** for the
+   project -- Console → Billing → Budgets & alerts is more reliable for
+   this than `gcloud billing budgets create`, which was finicky via CLI.
+9. **Set up instant publish** (optional) -- see below.
+
+### Applying updates
+
+Redeploying after a code change is the build + deploy steps from setup
+(5 and 6) again; `--set-secrets` can be omitted once the service already has
+them, since Cloud Run carries a revision's env/secret config forward.
+
+### Instant publish
+
+`server/publish.go` best-effort mirrors every save straight into the public
+static-site bucket (in the exact `sites.json` / `media/<id>/<file>` shape
+`tools/buildstatic` produces), so an edit is live on the public site within
+seconds instead of waiting on a GitHub Actions run. It's optional and
+inactive until configured: set `R2_PUBLIC_ACCESS_KEY_ID`,
+`R2_PUBLIC_SECRET_ACCESS_KEY`, and `R2_PUBLIC_BUCKET_NAME` (reusing the same
+`R2_ACCOUNT_ID`) to a token scoped to the *static* bucket -- as additional
+Secret Manager secrets wired into the same `--set-secrets` flag above.
+Until those are set, the server logs
+`[publish] R2_PUBLIC_* not fully configured` once at startup and every save
+still works, it just doesn't publish instantly (the next `git push` /
+Actions run still picks up local `sites/*.yaml` changes as before, though
+see the caveat above about those files no longer being kept in sync with
+real edits).
+
+Because of this, `.github/workflows/deploy-r2.yml`'s sync excludes
+`sites.json` and `media/*` from its `--delete` scope -- without that, a
+routine code-only deploy would wipe out whatever the editor most recently
+published.
+
+## Deploy (static site)
+
+This section covers the static mode's deploy to Cloudflare R2, which is
+fully automated via GitHub Actions.
+
+### Initial setup (static site)
 
 1. **Create an R2 bucket** — Cloudflare dashboard → R2 → Create bucket.
 2. **Make it publicly readable** — bucket → Settings → Public Access: either
@@ -169,12 +302,14 @@ is the one that's automated.
 7. **Run the deploy** — push to `master`, or trigger it manually from
    Actions → "Deploy static site to R2" → Run workflow. This builds `dist/`
    with `tools/buildstatic` and runs
-   `aws s3 sync dist/ s3://<bucket> --delete --exclude "*.pmtiles"`
-   against the R2 endpoint.
+   `aws s3 sync dist/ s3://<bucket> --delete --exclude "*.pmtiles" --exclude "sites.json" --exclude "media/*"`
+   against the R2 endpoint (the last two excludes are so this doesn't
+   clobber whatever the Cloud Run editor's instant-publish most recently
+   wrote -- see **Instant publish** above).
 8. **Verify** — open the bucket's public URL (or custom domain) and confirm
    the map, sites, and airspace overlay all load.
 
-### Applying updates
+### Applying updates (static site)
 
 Once the above is set up, shipping a change is just:
 
