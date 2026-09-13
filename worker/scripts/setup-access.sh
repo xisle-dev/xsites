@@ -27,6 +27,13 @@
 #   <domain>/api*); pass --paths "" (or just omit any path segment) to
 #   protect the whole domain instead, e.g. for a bare workers.dev fallback
 #   host with no public split.
+#
+#   Also renames the account's Zero Trust team domain and brands the login
+#   page (background/text color, logo, header/footer text) -- this is
+#   account-wide, not specific to this one Access application. Override any
+#   of it with CF_TEAM_NAME, CF_LOGIN_LOGO, CF_LOGIN_BG, CF_LOGIN_TEXT_COLOR,
+#   CF_LOGIN_HEADER, CF_LOGIN_FOOTER env vars; defaults assume the X/Sites
+#   branding and a logo already served at <domain>/logo.svg.
 
 set -euo pipefail
 
@@ -106,4 +113,25 @@ else
   curl -sS -X PUT "$API/access/apps/$app_id/policies/$policy_id" "${auth[@]}" -d "$policy_body" >/dev/null
 fi
 
+# --- Branded login page + team domain ---------------------------------------
+# The login page itself (and its URL, <team-name>.cloudflareaccess.com) are
+# account-wide, not per-application -- PATCHing access/organizations is
+# idempotent on its own (no existence check needed, just re-applies).
+TEAM_NAME="${CF_TEAM_NAME:-xsites}"
+LOGIN_LOGO="${CF_LOGIN_LOGO:-https://$DOMAIN/logo.svg}"
+LOGIN_BG="${CF_LOGIN_BG:-#14161a}"
+LOGIN_TEXT_COLOR="${CF_LOGIN_TEXT_COLOR:-#f2f2f2}"
+LOGIN_HEADER="${CF_LOGIN_HEADER:-X/Sites}"
+LOGIN_FOOTER="${CF_LOGIN_FOOTER:-Sign in to edit the X/Sites database.}"
+
+org_body=$(jq -n \
+  --arg name "$TEAM_NAME" \
+  --arg auth_domain "$TEAM_NAME.cloudflareaccess.com" \
+  --arg bg "$LOGIN_BG" --arg text "$LOGIN_TEXT_COLOR" \
+  --arg logo "$LOGIN_LOGO" --arg header "$LOGIN_HEADER" --arg footer "$LOGIN_FOOTER" \
+  '{name: $name, auth_domain: $auth_domain, login_design: {background_color: $bg, text_color: $text, logo_path: $logo, header_text: $header, footer_text: $footer}}')
+echo "Setting team domain to $TEAM_NAME.cloudflareaccess.com and branding the login page..."
+curl -sS -X PATCH "$API/access/organizations" "${auth[@]}" -d "$org_body" >/dev/null
+
 echo "Done. $DOMAIN (paths: ${PATHS:-<whole domain>}) is now protected; allowed: ${EMAILS[*]}"
+echo "Login page: https://$TEAM_NAME.cloudflareaccess.com"
