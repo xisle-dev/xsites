@@ -1047,7 +1047,16 @@ map.on("mouseout", () => {
 });
 
 map.on("click", (e) => {
-  if (!airspaceToggle.checked) computeGlideRange(e.lngLat.lng, e.lngLat.lat);
+  if (airspaceToggle.checked) return;
+  // Clicking back inside the fan that's already showing clears it instead
+  // of starting a new one right on top -- the only way to dismiss it
+  // otherwise is the legend's Clear button, which isn't visible unless the
+  // hamburger menu happens to be open.
+  if (glideOrigin && map.queryRenderedFeatures(e.point, { layers: [GLIDE_FILL_LAYER_ID] }).length) {
+    clearGlideRange();
+    return;
+  }
+  computeGlideRange(e.lngLat.lng, e.lngLat.lat);
 });
 
 // Rough centroid (mean vertex of its largest ring) of a Polygon/
