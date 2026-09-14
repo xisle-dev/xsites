@@ -134,7 +134,7 @@ Run the server locally with Wrangler, against real R2 buckets (no
 local-disk mode):
 
 ```bash
-cd worker
+cd server
 npm install
 npm run dev   # wrangler dev --remote
 ```
@@ -146,9 +146,10 @@ account (see below).
 ## Live editing (Cloudflare Workers)
 
 The dynamic app runs as a server (`server/`), deployed as a Cloudflare Worker. `/` is public and
-read-only; `/admin` (the full CRUD editor) and `/api` are gated by
-Cloudflare Access (email one-time-PIN) so only allowlisted addresses can
-reach them. Compute, storage, DNS, and auth are all Cloudflare-native -- see
+read-only; `/admin` (the full CRUD editor) and `/api` require completing
+Cloudflare Access's email one-time-PIN, with the app's own dynamic
+allowlist (see **Managing access** above) deciding who's actually let
+through. Compute, storage, DNS, and auth are all Cloudflare-native -- see
 github issue #11 for the full phased migration this came from (replacing an
 earlier Cloud Run + IAP setup that couldn't be scripted end-to-end for a
 personal Google account).
@@ -171,7 +172,7 @@ personal Google account).
    Miniflare's local simulated storage instead of the real bucket.)
 3. **Deploy the server**:
    ```bash
-   cd worker
+   cd server
    npm install
    npx wrangler deploy
    ```
@@ -184,23 +185,32 @@ personal Google account).
 5. **Provision Cloudflare Access** with the idempotent setup script:
    ```bash
    CF_ACCOUNT_ID=<account-id> CF_ACCESS_TOKEN=<token> \
-     server/scripts/setup-access.sh sites.xisle.net you@example.com [more emails...]
+     server/scripts/setup-access.sh sites.xisle.net
    ```
    The token needs "Access: Apps and Policies: Edit" and "Access:
    Organizations, Identity Providers, and Groups: Edit" (My Profile → API
    Tokens → Create Token). The script creates (or updates, if re-run) the
    email one-time-PIN login method, a self-hosted Access application for the
-   domain, and an allow policy for the given emails. By default it scopes
-   the application to just `<domain>/admin*` and `<domain>/api*` (matching
-   the public/admin split above) -- pass `--paths ""` before the domain to
-   protect the whole hostname instead. It also brands the Access login page
-   and renames the Zero Trust team domain -- see its header comment for the
-   override env vars.
+   domain, and a policy that just requires completing OTP (see **Managing
+   access** below for who's actually authorized -- that's not Access's job
+   here). By default it scopes the application to just `<domain>/admin*`
+   and `<domain>/api*` (matching the public/admin split above) -- pass
+   `--paths ""` before the domain to protect the whole hostname instead.
+   It also brands the Access login page and renames the Zero Trust team
+   domain -- see its header comment for the override env vars.
+6. **Seed the first allowed user** -- since authorization is a dynamic list
+   the app manages (not Access), someone has to be on it before anyone can
+   reach `/admin` to invite others:
+   ```bash
+   printf '%s' '{"emails":["you@example.com"]}' > /tmp/allowlist-seed.json
+   npx wrangler r2 object put xsites-live-data/access/allowlist.json \
+     --file=/tmp/allowlist-seed.json --content-type=application/json --remote
+   ```
 
 ### Applying updates
 
 ```bash
-cd worker
+cd server
 npx wrangler deploy
 ```
 
@@ -218,6 +228,23 @@ it. Because `PUBLIC_SITE` is just another R2 binding (not a separate set of
 credentials the way the old Cloud Run setup needed), this always runs --
 there's no "not configured yet" state to worry about.
 
+### Managing access
+
+Who can reach `/admin` and `/api` is a dynamic list the app itself owns
+(`server/src/accesslist.ts`, stored in `xsites-live-data` at
+`access/allowlist.json`) -- **not** Cloudflare Access's policy, which
+(per `setup-access.sh` above) just requires completing email OTP for
+*some* real, working email. Access proves identity; the app decides
+authorization.
+
+To grant someone access, from `/admin` open the hamburger menu → **Manage
+access…**, enter their email, and **Send invite**. Share the resulting
+link with them however you like (it's not emailed automatically) -- when
+they open it, their email is added to the allowlist and they're sent to
+`/admin`, where the normal OTP flow now succeeds for them. Invite links
+work once and expire after 7 days; both pending invites and existing
+users can be revoked from the same view.
+
 ## Portability
 
 `server/`'s request-handling code (`index.ts`'s routing, `siteyaml.ts`'s
@@ -227,25 +254,26 @@ natively, and Node 18+ can via a thin adapter. Two things are genuinely
 platform-specific, and both sit behind an interface for exactly that
 reason:
 
-- **Storage** (`objectstore.ts`): `store.ts`, `publish.ts`, and `tiles.ts`
-  all depend on the `ObjectStore` interface (get/getRange/put/delete/list/
-  exists on string keys and ArrayBuffers), not on R2 directly. `R2ObjectStore`
+- **Storage** (`objectstore.ts`): `store.ts`, `publish.ts`, `tiles.ts`, and
+  `accesslist.ts` (the invite/allowlist system) all depend on the
+  `ObjectStore` interface (get/getRange/put/delete/list/exists on string
+  keys and ArrayBuffers), not on R2 directly. `R2ObjectStore`
   is the only implementation today; adding an S3-compatible or
   local-filesystem one is contained entirely to a new class satisfying
   that interface -- nothing else changes.
 - **Auth** (`auth.ts`): `index.ts` calls an `Authenticator` for every
-  `/admin` and `/api` request and checks the result against an email
-  allowlist itself, rather than trusting that *something* already gated
-  the request. `CloudflareAccessAuthenticator` verifies Cloudflare Access's
-  signed JWT against the team's published keys (real signature
-  verification via Web Crypto, not just "a header is present") -- it's the
-  only implementation today, but the interface is small (one method:
-  given a `Request`, return an email or `null`), so a session/cookie-based
+  `/admin` and `/api` request and checks the result against the dynamic
+  allowlist itself (see **Managing access** above) -- authorization is
+  entirely the app's job, not something it trusts *something else* already
+  did. `CloudflareAccessAuthenticator` verifies Cloudflare Access's signed
+  JWT against the team's published keys (real signature verification via
+  Web Crypto, not just "a header is present") -- it's the only
+  implementation today, but the interface is small (one method: given a
+  `Request`, return an email or `null`), so a session/cookie-based
   authenticator for a self-hosted deployment is a contained addition, not
-  a rewrite. Cloudflare Access *also* still blocks unauthenticated
-  requests to `/admin*`/`/api*` at the edge (see **Live editing** below) --
-  belt and suspenders on Cloudflare, but the app-level check is what would
-  actually enforce the policy running anywhere else.
+  a rewrite. Cloudflare Access itself only proves *some* real email was
+  verified via OTP (see **Live editing** below) -- it doesn't restrict
+  which one, since that's this app's decision to make.
 
 What's *not* abstracted, because there's nothing generic to abstract it
 into: Workers Assets (static file serving) and `wrangler.toml`'s deploy

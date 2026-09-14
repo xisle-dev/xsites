@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 # Idempotently configures Cloudflare Access in front of the xsites editor
-# Worker: a self-hosted Access application on the given hostname (optionally
+# server: a self-hosted Access application on the given hostname (optionally
 # scoped to specific path patterns, so the rest of the hostname stays
-# public), an email One-Time-PIN login method (Cloudflare's default, but not
-# auto-provisioned on a fresh Zero Trust account), and an allow policy for
-# each address passed in. Safe to re-run -- every step checks for an
-# existing resource by name/domain before creating one. See github issues
-# #19 and #20 -- and the "public read-only + gated /admin" split described
-# there, since server/index.ts serves a public read-only viewer at "/" with
-# the full CRUD editor moved to "/admin", so only "/admin" and "/api" need
-# to sit behind Access.
+# public), and an email One-Time-PIN login method (Cloudflare's default, but
+# not auto-provisioned on a fresh Zero Trust account). Safe to re-run --
+# every step checks for an existing resource by name/domain before creating
+# one. See github issues #19 and #20 -- and the "public read-only + gated
+# /admin" split described there, since server/index.ts serves a public
+# read-only viewer at "/" with the full CRUD editor moved to "/admin", so
+# only "/admin" and "/api" need to sit behind Access.
+#
+# Access's own policy here just requires completing email OTP -- it does
+# NOT restrict which email. Authorization (who's actually allowed in) is a
+# separate, dynamic concern the app itself owns (see accesslist.ts and
+# /admin's "Manage access" view, github issue around "send an invitation").
+# Access proves "this is a real, controllable email"; the app decides if
+# that email is on its list. This is why this script takes no email
+# arguments -- there's nothing Access-side left to configure per-user.
 #
 # Requires:
 #   - Zero Trust already enabled on the account (one-time, dashboard-only --
@@ -20,8 +27,7 @@
 #     (My Profile -> API Tokens -> Create Token -> Custom Token).
 #
 # Usage:
-#   CF_ACCOUNT_ID=... CF_ACCESS_TOKEN=... ./setup-access.sh [--paths p1,p2,...] \
-#     <domain> <email> [more emails...]
+#   CF_ACCOUNT_ID=... CF_ACCESS_TOKEN=... ./setup-access.sh [--paths p1,p2,...] <domain>
 #
 #   --paths defaults to "admin*,api*" (matching <domain>/admin* and
 #   <domain>/api*); pass --paths "" (or just omit any path segment) to
@@ -45,13 +51,7 @@ fi
 
 ACCOUNT_ID="${CF_ACCOUNT_ID:?set CF_ACCOUNT_ID (see: wrangler whoami)}"
 TOKEN="${CF_ACCESS_TOKEN:?set CF_ACCESS_TOKEN to a token with Access edit permissions}"
-DOMAIN="${1:?usage: setup-access.sh [--paths p1,p2,...] <domain> <email> [email...]}"
-shift
-EMAILS=("$@")
-if [ "${#EMAILS[@]}" -eq 0 ]; then
-  echo "usage: setup-access.sh [--paths p1,p2,...] <domain> <email> [email...]" >&2
-  exit 1
-fi
+DOMAIN="${1:?usage: setup-access.sh [--paths p1,p2,...] <domain>}"
 
 API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID"
 auth=(-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
@@ -96,17 +96,24 @@ else
   curl -sS -X PUT "$API/access/apps/$app_id" "${auth[@]}" -d "$app_body" >/dev/null
 fi
 
-# --- Allow policy ------------------------------------------------------------
-policy_id=$(curl -sS "$API/access/apps/$app_id/policies" "${auth[@]}" \
+# --- Allow policy: anyone who completes email OTP ---------------------------
+# Drops any older per-email policy this app might have from before the
+# invite system (named "allow-owner-email-otp") in favor of one that just
+# requires OTP -- the app's own allowlist (accesslist.ts) is what actually
+# gates access now.
+old_policy_id=$(curl -sS "$API/access/apps/$app_id/policies" "${auth[@]}" \
   | jq -r '.result[] | select(.name == "allow-owner-email-otp") | .id' | head -1)
+if [ -n "$old_policy_id" ]; then
+  echo "Removing superseded per-email policy ($old_policy_id)..."
+  curl -sS -X DELETE "$API/access/apps/$app_id/policies/$old_policy_id" "${auth[@]}" >/dev/null
+fi
 
-# jq builds the emails array as [{"email":{"email":"..."}}, ...]
-policy_include=$(printf '%s\n' "${EMAILS[@]}" | jq -R '{email: {email: .}}' | jq -s .)
-policy_body=$(jq -n --argjson include "$policy_include" \
-  '{name: "allow-owner-email-otp", decision: "allow", include: $include}')
+policy_id=$(curl -sS "$API/access/apps/$app_id/policies" "${auth[@]}" \
+  | jq -r '.result[] | select(.name == "allow-any-otp") | .id' | head -1)
+policy_body='{"name": "allow-any-otp", "decision": "allow", "include": [{"everyone": {}}]}'
 
 if [ -z "$policy_id" ]; then
-  echo "Creating allow policy..."
+  echo "Creating allow-everyone-via-OTP policy..."
   curl -sS -X POST "$API/access/apps/$app_id/policies" "${auth[@]}" -d "$policy_body" >/dev/null
 else
   echo "Allow policy already exists ($policy_id), updating..."
@@ -133,5 +140,5 @@ org_body=$(jq -n \
 echo "Setting team domain to $TEAM_NAME.cloudflareaccess.com and branding the login page..."
 curl -sS -X PATCH "$API/access/organizations" "${auth[@]}" -d "$org_body" >/dev/null
 
-echo "Done. $DOMAIN (paths: ${PATHS:-<whole domain>}) is now protected; allowed: ${EMAILS[*]}"
+echo "Done. $DOMAIN (paths: ${PATHS:-<whole domain>}) now requires email OTP; who's actually authorized is managed from /admin's Manage access view."
 echo "Login page: https://$TEAM_NAME.cloudflareaccess.com"
