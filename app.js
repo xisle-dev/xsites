@@ -11,9 +11,11 @@ import {
 } from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
 import { layers as pmLayers, namedFlavor } from "https://cdn.jsdelivr.net/npm/@protomaps/basemaps@5.7.2/dist/esm/index.js";
 
-// Same key already used in dem-compare / vancouver-island-3d-map. Swap for
-// your own if this one is rotated/revoked.
-const GOOGLE_MAPS_API_KEY = "AIzaSyC6B3ghaO13sBDNQa68oSYhPJukPLLXR2o";
+// Dedicated GCP project "xisle-maps" (Map Tiles API + Places API (New)
+// enabled, billing linked). The previous shared key (used across
+// dem-compare / vancouver-island-3d-map) was revoked/deleted at some point
+// -- swap this for your own if it's ever rotated/revoked again.
+const GOOGLE_MAPS_API_KEY = "AIzaSyARar1QWsHgRrQLuDllrJ4nDLJBCq6H-SA";
 
 let googleSession = null; // { token, expiry: <unix seconds> }
 

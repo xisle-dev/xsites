@@ -16,9 +16,11 @@ import { layers as pmLayers, namedFlavor } from "https://cdn.jsdelivr.net/npm/@p
 // the classic <script> bundle in index.html, which exposes window.pmtiles.
 const { Protocol } = window.pmtiles;
 
-// Same key already used in dem-compare / vancouver-island-3d-map. Swap for
-// your own if this one is rotated/revoked.
-const GOOGLE_MAPS_API_KEY = "AIzaSyC6B3ghaO13sBDNQa68oSYhPJukPLLXR2o";
+// Dedicated GCP project "xisle-maps" (Map Tiles API + Places API (New)
+// enabled, billing linked). The previous shared key (used across
+// dem-compare / vancouver-island-3d-map) was revoked/deleted at some point
+// -- swap this for your own if it's ever rotated/revoked again.
+const GOOGLE_MAPS_API_KEY = "AIzaSyARar1QWsHgRrQLuDllrJ4nDLJBCq6H-SA";
 
 // The .pmtiles archive lives in the same R2 bucket as everything else (app
 // shell, sites.json, media) -- it's uploaded there separately/manually since
