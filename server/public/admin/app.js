@@ -1151,13 +1151,26 @@ function computeExtrusionRange(geometry, props) {
   const centroid = polygonCentroid(geometry);
   let groundElevation = 0;
   if (centroid) {
+    // queryTerrainElevation reports the terrain as currently rendered --
+    // i.e. with the exaggeration slider's multiplier already baked in --
+    // not the raw DEM value, so divide it back out to get the true ground
+    // elevation MSL floor/ceiling need to be measured against.
     const elevation = map.queryTerrainElevation({ lng: centroid[0], lat: centroid[1] });
-    if (typeof elevation === "number") groundElevation = elevation;
+    if (typeof elevation === "number") groundElevation = elevation / exaggeration;
   }
   const base = floorDatum === "MSL" ? Math.max(0, floorM - groundElevation) : floorM;
   const rawTop = ceilingDatum === "MSL" ? Math.max(base, ceilingM - groundElevation) : ceilingM;
   const top = Math.min(rawTop, base + MAX_HIGHLIGHT_EXTRUSION_M);
-  return [base, top];
+  // The fill-extrusion layer's own base/height aren't auto-scaled by
+  // terrain exaggeration the way the terrain mesh itself is, so without
+  // this the volume's true-MSL ceiling stays put while an exaggerated
+  // peak grows taller around it -- a summit safely below a low MSL
+  // ceiling in reality could visibly poke out above the rendered volume
+  // once exaggeration inflated it, even though nothing was actually wrong
+  // with the airspace data. Scaling both ends by the same factor terrain
+  // itself is exaggerated by keeps the volume visually consistent with
+  // however tall the ground around it is currently being drawn.
+  return [base * exaggeration, top * exaggeration];
 }
 
 function setAirspaceHighlight(geometry, properties) {
