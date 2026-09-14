@@ -1724,13 +1724,18 @@ function renderMarkers() {
   }
 }
 
-function populateAreaFilter() {
+// Refreshes both the sidebar's "All areas" filter and the Area field's
+// combo-box suggestions (see #fAreaOptions) from the current site list --
+// one shared source of truth for "every area already in use" since
+// they're the same set, just rendered as a <select> vs a <datalist>.
+function populateAreaOptions() {
   const areas = [...new Set(sites.map((s) => s.area).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const current = areaFilter.value;
   areaFilter.innerHTML =
     `<option value="">All areas</option>` +
     areas.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join("");
   if (areas.includes(current)) areaFilter.value = current;
+  document.getElementById("fAreaOptions").innerHTML = areas.map((a) => `<option value="${escapeHtml(a)}"></option>`).join("");
 }
 
 function renderSiteList() {
@@ -1833,7 +1838,7 @@ function showDetail(id) {
     await api(`/api/sites/${site.id}`, { method: "DELETE" });
     sites = sites.filter((s) => s.id !== site.id);
     renderMarkers();
-    populateAreaFilter();
+    populateAreaOptions();
     renderSiteList();
     showListView();
   });
@@ -2024,7 +2029,7 @@ siteForm.addEventListener("submit", async (e) => {
     sites = [...sites, saved];
   }
   renderMarkers();
-  populateAreaFilter();
+  populateAreaOptions();
   renderSiteList();
   showDetail(saved.id);
 });
@@ -2110,7 +2115,7 @@ map.on("click", (e) => {
 // left the sidebar empty even though the site data itself had already
 // loaded fine.
 function applyInitialUrlState() {
-  populateAreaFilter();
+  populateAreaOptions();
   if (urlParams.has("q")) siteSearch.value = urlParams.get("q");
   if (urlParams.has("area")) areaFilter.value = urlParams.get("area");
   renderMarkers();

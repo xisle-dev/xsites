@@ -10,7 +10,7 @@
   <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
        (e.g. to the current unix time) whenever either file changes, since a
        plain reload isn't reliably enough to pick up a new version. -->
-  <link rel="stylesheet" href="/style.css?v=1789410248" />
+  <link rel="stylesheet" href="/style.css?v=1789410853" />
 </head>
 <body>
   <div id="map"></div>
@@ -135,7 +135,8 @@
       <input type="text" id="fName" required />
 
       <label for="fArea">Area</label>
-      <input type="text" id="fArea" />
+      <input type="text" id="fArea" list="fAreaOptions" autocomplete="off" />
+      <datalist id="fAreaOptions"></datalist>
 
       <label>Description</label>
       <div class="rte"><div id="fDescription"></div></div>
@@ -177,6 +178,6 @@
   <div id="glideHoverTip" class="glide-hover-tip" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
-  <script type="module" src="/admin/app.js?v=1789410248"></script>
+  <script type="module" src="/admin/app.js?v=1789410853"></script>
 </body>
 </html>
