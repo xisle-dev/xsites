@@ -327,12 +327,27 @@ async function dispatch(ctx: Ctx, request: Request): Promise<Response> {
   return new Response("Not found", { status: 404 });
 }
 
+// Module-scoped, not per-request: a Worker isolate stays warm across many
+// requests, and CloudflareAccessAuthenticator caches the team's JWKS
+// in-instance for an hour (see auth.ts) specifically to avoid a network
+// fetch on every authenticated request. Constructing a fresh authenticator
+// inside fetch() would throw that cache away every single request --
+// exactly what was causing a multi-second delay on every /admin and /api
+// call while signed in (unauthenticated requests never hit this path at
+// all, since authenticate() short-circuits before fetching JWKS when
+// there's no token to verify -- which is why only the signed-in case was
+// slow).
+let sharedAuthenticator: CloudflareAccessAuthenticator | null = null;
+
 export default {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
+    if (!sharedAuthenticator) {
+      sharedAuthenticator = new CloudflareAccessAuthenticator(env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD);
+    }
     const ctx: Ctx = {
       live: new R2ObjectStore(env.LIVE_DATA),
       publicStore: new R2ObjectStore(env.PUBLIC_SITE),
-      auth: new CloudflareAccessAuthenticator(env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD),
+      auth: sharedAuthenticator,
       allowedEmails: new Set(env.ACCESS_ALLOWED_EMAILS.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)),
     };
 

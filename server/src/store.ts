@@ -38,18 +38,27 @@ const textDecoder = new TextDecoder();
 
 export async function getAllSites(store: ObjectStore): Promise<Site[]> {
   const keys = await store.list(SITES_PREFIX);
-  const sites: Site[] = [];
+  const ids: string[] = [];
   for (const key of keys) {
     const rest = key.slice(SITES_PREFIX.length);
     if (!key.endsWith(".yaml") || rest.includes("/")) continue; // a media object, not a top-level site
-    const id = rest.slice(0, -".yaml".length);
-    try {
-      sites.push(await getSite(store, id));
-    } catch {
-      // skip anything unreadable rather than failing the whole list
-    }
+    ids.push(rest.slice(0, -".yaml".length));
   }
-  return sites;
+  // Fetched in parallel rather than one at a time -- with dozens of sites,
+  // awaiting each get() sequentially turned "list all sites" into that many
+  // sequential R2 round trips (measured ~5s for 63 sites), which is exactly
+  // what made /admin (backed by this, via /api/sites) noticeably slower to
+  // load than / (backed by the pre-aggregated /sites.json, a single get).
+  const results = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        return await getSite(store, id);
+      } catch {
+        return null; // skip anything unreadable rather than failing the whole list
+      }
+    }),
+  );
+  return results.filter((s): s is Site => s !== null);
 }
 
 export async function getSite(store: ObjectStore, id: string): Promise<Site> {
