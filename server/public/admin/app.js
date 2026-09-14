@@ -1124,6 +1124,108 @@ document.getElementById("airspaceBackBtn").addEventListener("click", () => {
   showListView();
 });
 
+// --- Access management: invite links + the dynamic allowlist they grant
+// access to (see server/src/accesslist.ts). Cloudflare Access itself just
+// requires completing email OTP now -- this view is what actually decides
+// who's allowed in. ---
+const accessView = document.getElementById("accessView");
+const allowlistEntriesEl = document.getElementById("allowlistEntries");
+const pendingInvitesEl = document.getElementById("pendingInvites");
+const inviteForm = document.getElementById("inviteForm");
+const inviteEmailInput = document.getElementById("inviteEmail");
+const inviteLinkResult = document.getElementById("inviteLinkResult");
+const inviteLinkText = document.getElementById("inviteLinkText");
+
+document.getElementById("manageAccessBtn").addEventListener("click", showAccessView);
+document.getElementById("accessBackBtn").addEventListener("click", showListView);
+
+async function showAccessView() {
+  stopPlacing();
+  sitesListView.hidden = true;
+  siteDetailView.hidden = true;
+  siteForm.hidden = true;
+  airspaceListView.hidden = true;
+  accessView.hidden = false;
+  expandPanel();
+  inviteLinkResult.hidden = true;
+  await refreshAccessLists();
+}
+
+async function refreshAccessLists() {
+  const [allowed, invites] = await Promise.all([api("/api/access/allowlist"), api("/api/access/invites")]);
+
+  allowlistEntriesEl.innerHTML = allowed.length
+    ? allowed
+        .map(
+          (email) => `
+        <div class="access-entry">
+          <span class="access-entry-email">${escapeHtml(email)}</span>
+          <button type="button" data-revoke-email="${escapeHtml(email)}">Revoke</button>
+        </div>`
+        )
+        .join("")
+    : `<div class="access-empty">No one has access yet.</div>`;
+
+  allowlistEntriesEl.querySelectorAll("[data-revoke-email]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const email = btn.dataset.revokeEmail;
+      if (!confirm(`Revoke access for ${email}?`)) return;
+      await api(`/api/access/allowlist/${encodeURIComponent(email)}`, { method: "DELETE" });
+      refreshAccessLists();
+    });
+  });
+
+  // Accepted invites stay around as a record but have nothing left to do
+  // (their email's already on the allowlist above) -- only pending ones
+  // are actionable here.
+  const pending = invites.filter((inv) => !inv.acceptedAt);
+  pendingInvitesEl.innerHTML = pending.length
+    ? pending
+        .map(
+          (inv) => `
+        <div class="access-entry">
+          <div>
+            <div class="access-entry-email">${escapeHtml(inv.email)}</div>
+            <div class="access-entry-meta">expires ${new Date(inv.expiresAt).toLocaleDateString()}</div>
+          </div>
+          <button type="button" data-revoke-invite="${escapeHtml(inv.token)}">Revoke</button>
+        </div>`
+        )
+        .join("")
+    : `<div class="access-empty">No pending invites.</div>`;
+
+  pendingInvitesEl.querySelectorAll("[data-revoke-invite]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api(`/api/access/invites/${btn.dataset.revokeInvite}`, { method: "DELETE" });
+      refreshAccessLists();
+    });
+  });
+}
+
+inviteForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = inviteEmailInput.value.trim();
+  if (!email) return;
+  const invite = await api("/api/access/invites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  inviteLinkText.value = new URL(`/invite/${invite.token}`, window.location.origin).href;
+  inviteLinkResult.hidden = false;
+  inviteEmailInput.value = "";
+  refreshAccessLists();
+});
+
+document.getElementById("copyInviteLinkBtn").addEventListener("click", async () => {
+  inviteLinkText.select();
+  try {
+    await navigator.clipboard.writeText(inviteLinkText.value);
+  } catch {
+    document.execCommand("copy");
+  }
+});
+
 // The row currently pinned by a click, if any -- kept highlighted (and
 // re-highlighted after a hover elsewhere ends) so it survives map
 // panning/rotating instead of only showing while the pointer sits on the
@@ -1586,6 +1688,7 @@ function showListView() {
   siteDetailView.hidden = true;
   siteForm.hidden = true;
   airspaceListView.hidden = true;
+  accessView.hidden = true;
   setSiteTracks([]);
   selectedSiteId = null;
   updateUrl();
@@ -1599,6 +1702,7 @@ function showDetail(id) {
   sitesListView.hidden = true;
   siteForm.hidden = true;
   airspaceListView.hidden = true;
+  accessView.hidden = true;
   siteDetailView.hidden = false;
   expandPanel();
   setSiteTracks([]);
@@ -1660,6 +1764,7 @@ function showForm(site) {
   sitesListView.hidden = true;
   siteDetailView.hidden = true;
   airspaceListView.hidden = true;
+  accessView.hidden = true;
   siteForm.hidden = false;
   expandPanel();
   document.getElementById("siteFormTitle").textContent = site ? "Edit site" : "Add site";

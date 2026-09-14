@@ -34,11 +34,14 @@ binding = "PUBLIC_SITE"
 bucket_name = "xsites"
 
 # Cloudflare Access config, read by auth.ts -- not secret (an audience tag
-# and team domain are effectively public identifiers, and the allowlist
-# isn't sensitive for a single-user hobby project), so plain vars rather
+# and team domain are effectively public identifiers), so plain vars rather
 # than secrets. ACCESS_AUD is the "xsites editor" Access application's aud
 # tag (Zero Trust dashboard -> Access -> Applications -> the app -> Overview).
+# Who's actually allowed in is a *separate* concern now -- a dynamic
+# allowlist in LIVE_DATA (see accesslist.ts), managed via invites from
+# /admin, not a static list here. Access's own policy just requires
+# completing email OTP (see setup-access.sh); it doesn't restrict which
+# email, since this app enforces that itself.
 [vars]
 ACCESS_TEAM_DOMAIN = "xsites.cloudflareaccess.com"
 ACCESS_AUD = "8bcfeafd108027da706e730bbb68c72dea524bf2429750da57eff4908471a905"
-ACCESS_ALLOWED_EMAILS = "gtissington@gmail.com"

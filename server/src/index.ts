@@ -27,6 +27,7 @@ import { handleTileRequest } from "./tiles";
 import { publishAllSites, publishMedia, publishDeleteMedia, publishDeleteSiteMedia } from "./publish";
 import { R2ObjectStore, type ObjectStore } from "./objectstore";
 import { CloudflareAccessAuthenticator, type Authenticator } from "./auth";
+import { getAllowedEmails, isEmailAllowed, addAllowedEmail, removeAllowedEmail, createInvite, listInvites, revokeInvite, acceptInvite } from "./accesslist";
 
 // The raw shape Cloudflare hands fetch() -- R2 bindings plus the Access
 // team domain/app audience needed to verify a request's JWT. Nothing past
@@ -36,14 +37,12 @@ export interface CloudflareEnv {
   PUBLIC_SITE: R2Bucket;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
-  ACCESS_ALLOWED_EMAILS: string;
 }
 
 interface Ctx {
   live: ObjectStore;
   publicStore: ObjectStore;
   auth: Authenticator;
-  allowedEmails: Set<string>;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -298,9 +297,62 @@ async function handleGetMedia(ctx: Ctx, id: string, filename: string): Promise<R
   }
 }
 
+async function handleListAllowlist(ctx: Ctx): Promise<Response> {
+  return json(await getAllowedEmails(ctx.live));
+}
+
+async function handleRevokeAllowlist(ctx: Ctx, emailSegment: string): Promise<Response> {
+  await removeAllowedEmail(ctx.live, decodeURIComponent(emailSegment));
+  return json({ ok: true });
+}
+
+async function handleListInvites(ctx: Ctx): Promise<Response> {
+  return json(await listInvites(ctx.live));
+}
+
+async function handleCreateInvite(ctx: Ctx, request: Request): Promise<Response> {
+  let body: { email?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse(400, "invalid JSON body");
+  }
+  const email = (body.email ?? "").trim();
+  if (email === "" || !email.includes("@")) return errorResponse(400, "a valid email is required");
+  return json(await createInvite(ctx.live, email), 201);
+}
+
+async function handleRevokeInvite(ctx: Ctx, token: string): Promise<Response> {
+  await revokeInvite(ctx.live, token);
+  return json({ ok: true });
+}
+
+// Public -- no auth required to reach this path (that's the point: the
+// invitee doesn't have access yet). Only does anything if the token is a
+// valid, unexpired, not-yet-accepted invite (see accesslist.ts's
+// acceptInvite); anything else shows an error rather than silently
+// granting access. Cloudflare Access itself still requires completing
+// email OTP before the redirect target (/admin) actually succeeds -- this
+// endpoint only pre-authorizes the email in our own allowlist, it doesn't
+// create a session or bypass Access.
+async function handleAcceptInvite(ctx: Ctx, token: string): Promise<Response> {
+  const invite = await acceptInvite(ctx.live, token);
+  if (!invite) {
+    return new Response(
+      `<!doctype html><title>Invalid invite</title>
+<body style="font-family:sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#14161a">
+<h1>This invite link isn't valid</h1>
+<p>It may have expired, already been used, or the link may be incorrect. Ask whoever invited you to send a new one.</p>
+</body>`,
+      { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } },
+    );
+  }
+  return new Response(null, { status: 302, headers: { Location: "/admin/" } });
+}
+
 // /admin and /api are the only gated paths (see README's Live editing
 // section) -- everything else (/, static assets, /sites.json, /media/*,
-// /tiles/*) is intentionally public.
+// /tiles/*, /invite/<token>) is intentionally public.
 function requiresAuth(segments: string[]): boolean {
   return segments[0] === "admin" || segments[0] === "api";
 }
@@ -334,6 +386,20 @@ async function dispatch(ctx: Ctx, request: Request): Promise<Response> {
   } else if (segments[0] === "tiles" && method === "GET") {
     const tileResponse = await handleTileRequest(request, ctx.publicStore);
     if (tileResponse) return tileResponse;
+  } else if (segments[0] === "api" && segments[1] === "access") {
+    if (segments[2] === "allowlist") {
+      if (segments.length === 3 && method === "GET") return await handleListAllowlist(ctx);
+      if (segments.length === 4 && method === "DELETE") return await handleRevokeAllowlist(ctx, segments[3]);
+    } else if (segments[2] === "invites") {
+      if (segments.length === 3) {
+        if (method === "GET") return await handleListInvites(ctx);
+        if (method === "POST") return await handleCreateInvite(ctx, request);
+      } else if (segments.length === 4 && method === "DELETE") {
+        return await handleRevokeInvite(ctx, segments[3]);
+      }
+    }
+  } else if (segments[0] === "invite" && segments.length === 2 && method === "GET") {
+    return await handleAcceptInvite(ctx, segments[1]);
   }
 
   return new Response("Not found", { status: 404 });
@@ -360,7 +426,6 @@ export default {
       live: new R2ObjectStore(env.LIVE_DATA),
       publicStore: new R2ObjectStore(env.PUBLIC_SITE),
       auth: sharedAuthenticator,
-      allowedEmails: new Set(env.ACCESS_ALLOWED_EMAILS.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)),
     };
 
     const url = new URL(request.url);
@@ -368,7 +433,11 @@ export default {
 
     if (requiresAuth(segments)) {
       const identity = await ctx.auth.authenticate(request);
-      if (!identity || !ctx.allowedEmails.has(identity.email.toLowerCase())) {
+      // The allowlist is dynamic (see accesslist.ts) -- deliberately not
+      // cached, unlike the JWKS above: it's small (one object), read on
+      // every gated request, and correctness after an invite-accept or a
+      // revoke matters more here than shaving off one more R2 read.
+      if (!identity || !(await isEmailAllowed(ctx.live, identity.email))) {
         return ctx.auth.challenge(request);
       }
     }

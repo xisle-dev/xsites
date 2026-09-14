@@ -367,6 +367,7 @@ html, body {
 #sitesListView,
 #siteDetailView,
 #airspaceListView,
+#accessView,
 #siteForm {
   display: flex;
   flex-direction: column;
@@ -377,6 +378,7 @@ html, body {
 #sitesListView[hidden],
 #siteDetailView[hidden],
 #airspaceListView[hidden],
+#accessView[hidden],
 #siteForm[hidden] {
   display: none;
 }
@@ -515,7 +517,8 @@ html, body {
 }
 
 #siteDetailContent,
-#siteForm {
+#siteForm,
+#accessView {
   overflow-y: auto;
   padding: 0 16px 16px;
 }
@@ -532,7 +535,8 @@ html, body {
 }
 
 #siteDetailContent .section-label,
-#siteForm .section-label {
+#siteForm .section-label,
+#accessView .section-label {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -697,7 +701,8 @@ html, body {
   cursor: pointer;
 }
 
-#siteForm label {
+#siteForm label,
+#accessView label {
   display: block;
   margin: 10px 0 4px;
   font-size: 12px;
@@ -705,7 +710,9 @@ html, body {
 }
 
 #siteForm input[type="text"],
-#siteForm input[type="number"] {
+#siteForm input[type="number"],
+#accessView input[type="email"],
+#accessView input[type="text"] {
   width: 100%;
   padding: 7px 10px;
   border-radius: 6px;
@@ -791,10 +798,95 @@ html, body {
   flex: 1;
 }
 
-#siteForm .hint {
+#siteForm .hint,
+#accessView .hint {
   font-size: 11px;
   color: #9aa1ab;
   margin: 8px 0 4px;
+}
+
+/* --- Access management (invite links, allowlist) --- */
+
+#inviteForm button {
+  width: 100%;
+  background: #ff5a3c;
+  color: #14161a;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.invite-link-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.invite-link-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #40454e;
+  background: #1c1f25;
+  color: #cfd3d9;
+  font-size: 11.5px;
+}
+
+.invite-link-row button {
+  background: #2a2e35;
+  color: #f2f2f2;
+  border: 1px solid #40454e;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.access-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 2px;
+  border-bottom: 1px solid #262a31;
+  font-size: 12.5px;
+}
+
+.access-entry:last-child {
+  border-bottom: none;
+}
+
+.access-entry-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.access-entry-meta {
+  font-size: 10.5px;
+  color: #7f8791;
+}
+
+.access-entry button {
+  flex: 0 0 auto;
+  background: #3a2226;
+  color: #ff8a7a;
+  border: 1px solid #5a2f34;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.access-empty {
+  font-size: 12px;
+  color: #7f8791;
+  padding: 4px 2px;
 }
 
 #siteForm #useCurrentViewBtn,
