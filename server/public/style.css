@@ -969,9 +969,8 @@ html, body {
   gap: 4px;
 }
 
-.airspace-legend-disabled {
-  opacity: 0.4;
-  pointer-events: none;
+.airspace-legend[hidden] {
+  display: none;
 }
 
 .airspace-legend label {
@@ -1005,15 +1004,13 @@ html, body {
 /* --- Glide range tool --- */
 
 .glide-legend {
-  position: absolute;
-  bottom: 16px;
-  left: 16px;
-  z-index: 20;
-  background: #14161aee;
-  border: 1px solid #2a2e35;
-  border-radius: 8px;
-  padding: 10px 12px;
-  min-width: 120px;
+  border-top: 1px solid #2a2e35;
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.glide-legend[hidden] {
+  display: none;
 }
 
 .glide-legend-title {

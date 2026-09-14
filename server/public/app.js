@@ -644,7 +644,7 @@ function applyAirspaceVisibility() {
   const visibility = airspaceToggle.checked ? "visible" : "none";
   map.setLayoutProperty(AIRSPACE_FILL_LAYER_ID, "visibility", visibility);
   map.setLayoutProperty(AIRSPACE_LINE_LAYER_ID, "visibility", visibility);
-  airspaceLegend.classList.toggle("airspace-legend-disabled", !airspaceToggle.checked);
+  airspaceLegend.hidden = !airspaceToggle.checked;
   if (airspaceToggle.checked) {
     ensureAirspaceDataLoaded();
     clearGlideRange(); // the two overlays would just fight for the same pixels
