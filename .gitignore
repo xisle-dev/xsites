@@ -1,10 +1,14 @@
-# Build artifacts -- rebuild with e.g. cd tools/fetchairspace && go build .
-tools/*/*.exe
+# etl build artifact -- rebuild with: cd etl && go build -o etl.exe .
+etl/etl.exe
+etl/etl
 
-# Regenerable Protomaps basemap extract (~200MB, over GitHub's file size
-# limit anyway). Regenerate with go-pmtiles extract -- see README.md.
-tiles/*.pmtiles
-tiles/*.log
+# etl's raw-download cache and regenerable large output (the PMTiles
+# archive, ~200MB, over GitHub's file size limit anyway). Regenerate with
+# `etl airspace` / `etl tiles` -- see README.md. output/airspace.geojson
+# itself IS committed (small, human-reviewable) -- only the pmtiles archive
+# and the raw cache are excluded.
+etl/data-sources/
+etl/output/*.pmtiles
 
 # Wrangler's local cache (account info, OAuth state) from running it in this
 # directory -- machine-local, not project state.

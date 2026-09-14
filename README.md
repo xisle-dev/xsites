@@ -66,10 +66,11 @@ see github issue #11 for the Cloud Run migration.
   restricted/danger areas and FIR boundaries, lumped together as "SUA") from
   OpenAIP (CC BY-NC 4.0, ultimately sourced from NAV CANADA's Designated
   Airspace Handbook), pre-filtered to the Vancouver Island flying area by
-  `tools/fetchairspace` and checked into the repo as `data/airspace.geojson`.
-  Off by default (most visits never need it), and `data/airspace.geojson`
-  itself isn't even fetched until the "Show airspace" checkbox is first
-  ticked — its GeoJSON source starts out empty and is populated on demand.
+  `etl airspace` (see **Regenerating the ETL outputs** below) and served
+  from `worker/public/data/airspace.geojson`. Off by default (most visits
+  never need it), and this file itself isn't even fetched until the "Show
+  airspace" checkbox is first ticked — its GeoJSON source starts out empty
+  and is populated on demand.
   Once on, rendered as flat 2D fill + line layers; a separate
   `airspace-highlight` GeoJSON source drives the selected/pinned entry's
   outline, on-map label, and a `fill-extrusion` layer that extrudes just
@@ -161,7 +162,7 @@ personal Google account).
    too large for git and rarely changes):
    ```bash
    npx wrangler r2 object put xsites/tiles/labels-vancouver-island.pmtiles \
-     --file=tiles/labels-vancouver-island.pmtiles \
+     --file=etl/output/labels-vancouver-island.pmtiles \
      --content-type=application/octet-stream --remote
    ```
    (`--remote` matters -- without it, `wrangler r2 object put` writes to
@@ -215,19 +216,37 @@ it. Because `PUBLIC_SITE` is just another R2 binding (not a separate set of
 credentials the way the old Cloud Run setup needed), this always runs --
 there's no "not configured yet" state to worry about.
 
-## Regenerating the tile extract
+## Regenerating the ETL outputs
 
-`tiles/*.pmtiles` isn't checked in (regenerable, and over GitHub's file size
-limit). Rebuild it with [go-pmtiles](https://github.com/protomaps/go-pmtiles):
+`etl/` is a single Go program (`etl/main.go`, `etl/airspace.go`,
+`etl/tiles.go`) that builds this app's two regenerable, offline data
+artifacts. Both are dev-time-only -- nothing here runs in production, and
+neither is part of any automated build (airspace boundaries change on the
+order of months, basemap builds are refreshed by hand when wanted, not on
+every push). Raw downloads worth caching land in `etl/data-sources/`
+(gitignored); final artifacts land in `etl/output/` -- `airspace.geojson`
+is small and committed there directly, `labels-vancouver-island.pmtiles` is
+~200MB and gitignored.
 
-```powershell
-go install github.com/protomaps/go-pmtiles@latest
-go-pmtiles extract https://build.protomaps.com/<YYYYMMDD>.pmtiles tiles/labels-vancouver-island.pmtiles --bbox=-126.9,48.1,-122.8,50.6
+```bash
+cd etl
+go build -o etl.exe .   # or just `go run .`
 ```
 
-Use today's date (or a recent one) for the build filename — see
-https://maps.protomaps.com/builds/. After regenerating, re-upload it (see
-**Live editing** step 2).
+**Airspace** (`./etl.exe airspace`): downloads OpenAIP's Canada-wide export,
+caches it at `etl/data-sources/openaip-ca-airspace.geojson`, trims it to the
+Vancouver Island flying area, and writes `etl/output/airspace.geojson`.
+Copy that into `worker/public/data/airspace.geojson` and redeploy (see
+**Notes** below for why it's not read directly from `etl/output/`).
+
+**Tiles** (`./etl.exe tiles [YYYYMMDD]`): extracts the Vancouver Island bbox
+out of a [Protomaps daily basemap build](https://maps.protomaps.com/builds/)
+into `etl/output/labels-vancouver-island.pmtiles`, using `go-pmtiles`'s own
+`Extract` function directly (`github.com/protomaps/go-pmtiles/pmtiles`) --
+byte-range reads against the remote archive, nothing multi-GB downloaded
+locally. Defaults to today's date, walking backward up to 10 days if
+there's no build for it (Protomaps doesn't publish one every single day).
+After regenerating, re-upload it (see **Live editing** step 2).
 
 ## Notes
 
@@ -248,3 +267,8 @@ https://maps.protomaps.com/builds/. After regenerating, re-upload it (see
   reliably fix it. Bump the relevant `?v=` value(s) (e.g. to the current
   unix time) whenever `app.js` or `style.css` changes, or a deploy can
   silently keep serving stale JS to already-open tabs.
+- `worker/public/data/airspace.geojson` is its own tracked copy, not read
+  directly from `etl/output/` -- Workers Assets deploys whatever's
+  physically in `worker/public/` at `wrangler deploy` time, and the Worker
+  has no access to a developer's local `etl/output/` at runtime. Copy the
+  file over after every `etl airspace` regen, same as `app.js`/`style.css`.

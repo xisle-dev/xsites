@@ -1,11 +1,13 @@
-// fetchairspace downloads Canada's airspace dataset from OpenAIP's public,
-// anonymous export bucket (CC BY-NC 4.0 -- see https://www.openaip.net,
-// attribution required), keeps only the polygons that overlap the Vancouver
-// Island flying area, and writes a trimmed data/airspace.geojson checked
-// into the repo. Re-run this by hand occasionally to pick up NAV CANADA
-// airspace revisions -- it's not part of the automated build since airspace
-// boundaries change on the order of months, not every push.
 package main
+
+// Downloads Canada's airspace dataset from OpenAIP's public, anonymous
+// export bucket (CC BY-NC 4.0 -- see https://www.openaip.net, attribution
+// required), caches the raw download, then keeps only the polygons that
+// overlap the Vancouver Island flying area and writes a trimmed
+// output/airspace.geojson checked into the repo. Re-run this by hand
+// occasionally to pick up NAV CANADA airspace revisions -- it's not part
+// of any automated build since airspace boundaries change on the order of
+// months, not every push.
 
 import (
 	"encoding/json"
@@ -14,50 +16,51 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
-const sourceURL = "https://storage.openaip.net/openaip-system-exports/ca_asp.geojson"
+const airspaceSourceURL = "https://storage.openaip.net/openaip-system-exports/ca_asp.geojson"
 
 // Vancouver Island plus a margin covering the southern Gulf Islands and the
 // nearby mainland coast (XC flights routinely range beyond the launch pin).
 const (
-	minLon = -127.2
-	minLat = 47.7
-	maxLon = -122.4
-	maxLat = 51.0
+	airspaceMinLon = -127.2
+	airspaceMinLat = 47.7
+	airspaceMaxLon = -122.4
+	airspaceMaxLat = 51.0
 )
 
-type rawFeature struct {
-	Type       string          `json:"type"`
-	Properties rawProperties   `json:"properties"`
-	Geometry   json.RawMessage `json:"geometry"`
+type airspaceRawFeature struct {
+	Type       string              `json:"type"`
+	Properties airspaceRawProperties `json:"properties"`
+	Geometry   json.RawMessage     `json:"geometry"`
 }
 
-type rawProperties struct {
-	Name       string `json:"name"`
-	IcaoClass  int    `json:"icaoClass"`
-	UpperLimit rawAlt `json:"upperLimit"`
-	LowerLimit rawAlt `json:"lowerLimit"`
+type airspaceRawProperties struct {
+	Name       string       `json:"name"`
+	IcaoClass  int          `json:"icaoClass"`
+	UpperLimit airspaceRawAlt `json:"upperLimit"`
+	LowerLimit airspaceRawAlt `json:"lowerLimit"`
 }
 
-type rawAlt struct {
-	Value           float64 `json:"value"`
-	Unit            int     `json:"unit"`
-	ReferenceDatum  int     `json:"referenceDatum"`
+type airspaceRawAlt struct {
+	Value          float64 `json:"value"`
+	Unit           int     `json:"unit"`
+	ReferenceDatum int     `json:"referenceDatum"`
 }
 
-type rawCollection struct {
-	Type     string       `json:"type"`
-	Features []rawFeature `json:"features"`
+type airspaceRawCollection struct {
+	Type     string               `json:"type"`
+	Features []airspaceRawFeature `json:"features"`
 }
 
-type outFeature struct {
-	Type       string          `json:"type"`
-	Properties outProperties   `json:"properties"`
-	Geometry   json.RawMessage `json:"geometry"`
+type airspaceOutFeature struct {
+	Type       string             `json:"type"`
+	Properties airspaceOutProperties `json:"properties"`
+	Geometry   json.RawMessage    `json:"geometry"`
 }
 
-type outProperties struct {
+type airspaceOutProperties struct {
 	Name    string `json:"name"`
 	Class   string `json:"class"`
 	Floor   string `json:"floor"`
@@ -76,10 +79,10 @@ type outProperties struct {
 	CeilingDatum string  `json:"ceilingDatum"`
 }
 
-type outCollection struct {
-	Type       string          `json:"type"`
-	Attributes map[string]any  `json:"attribution"`
-	Features   []outFeature    `json:"features"`
+type airspaceOutCollection struct {
+	Type       string                 `json:"type"`
+	Attributes map[string]any         `json:"attribution"`
+	Features   []airspaceOutFeature   `json:"features"`
 }
 
 // icaoClass values empirically confirmed against known BC airspace (e.g.
@@ -87,7 +90,7 @@ type outCollection struct {
 // areas -> 8). OpenAIP's public schema docs don't spell this out; see the
 // Google Group thread linked from their docs page for others hitting the
 // same gap.
-func classLabel(c int) string {
+func airspaceClassLabel(c int) string {
 	switch c {
 	case 0:
 		return "A"
@@ -110,22 +113,22 @@ func classLabel(c int) string {
 	}
 }
 
-const feetToMeters = 0.3048
+const airspaceFeetToMeters = 0.3048
 
 // toMeters converts a raw limit to meters plus which datum it's relative
 // to. Flight levels (unit 6, always paired with the STD datum) are treated
-// as an MSL feet equivalent -- see the outProperties comment.
-func toMeters(a rawAlt) (meters float64, datum string) {
+// as an MSL feet equivalent -- see airspaceOutProperties' comment.
+func airspaceToMeters(a airspaceRawAlt) (meters float64, datum string) {
 	if a.Unit == 6 {
-		return a.Value * 100 * feetToMeters, "MSL"
+		return a.Value * 100 * airspaceFeetToMeters, "MSL"
 	}
 	if a.ReferenceDatum == 0 {
-		return a.Value * feetToMeters, "GND"
+		return a.Value * airspaceFeetToMeters, "GND"
 	}
-	return a.Value * feetToMeters, "MSL"
+	return a.Value * airspaceFeetToMeters, "MSL"
 }
 
-func formatLimit(a rawAlt) string {
+func airspaceFormatLimit(a airspaceRawAlt) string {
 	if a.Unit == 6 { // flight level
 		return fmt.Sprintf("FL%d", int(a.Value))
 	}
@@ -142,7 +145,7 @@ func formatLimit(a rawAlt) string {
 	}
 }
 
-func bboxOverlaps(geom json.RawMessage) (bool, error) {
+func airspaceBboxOverlaps(geom json.RawMessage) (bool, error) {
 	var g struct {
 		Coordinates json.RawMessage `json:"coordinates"`
 	}
@@ -198,18 +201,16 @@ func bboxOverlaps(geom json.RawMessage) (bool, error) {
 	if first {
 		return false, nil
 	}
-	return !(maxX < minLon || minX > maxLon || maxY < minLat || minY > maxLat), nil
+	return !(maxX < airspaceMinLon || minX > airspaceMaxLon || maxY < airspaceMinLat || minY > airspaceMaxLat), nil
 }
 
-func main() {
-	out := "data/airspace.geojson"
-	if len(os.Args) > 1 {
-		out = os.Args[1]
-	}
+func runAirspace() {
+	rawCachePath := filepath.Join("data-sources", "openaip-ca-airspace.geojson")
+	outPath := filepath.Join("output", "airspace.geojson")
 
-	resp, err := http.Get(sourceURL)
+	resp, err := http.Get(airspaceSourceURL)
 	if err != nil {
-		log.Fatalf("downloading %s: %v", sourceURL, err)
+		log.Fatalf("downloading %s: %v", airspaceSourceURL, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -217,13 +218,21 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var raw rawCollection
+	if err := os.MkdirAll("data-sources", 0755); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(rawCachePath, body, 0644); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("cached raw download at %s (%d bytes)", rawCachePath, len(body))
+
+	var raw airspaceRawCollection
 	if err := json.Unmarshal(body, &raw); err != nil {
 		log.Fatalf("parsing source geojson: %v", err)
 	}
 	log.Printf("downloaded %d Canada-wide airspace features", len(raw.Features))
 
-	result := outCollection{
+	result := airspaceOutCollection{
 		Type: "FeatureCollection",
 		Attributes: map[string]any{
 			"source":  "OpenAIP (https://www.openaip.net)",
@@ -231,19 +240,19 @@ func main() {
 		},
 	}
 	for _, f := range raw.Features {
-		overlap, err := bboxOverlaps(f.Geometry)
+		overlap, err := airspaceBboxOverlaps(f.Geometry)
 		if err != nil || !overlap {
 			continue
 		}
-		floorM, floorDatum := toMeters(f.Properties.LowerLimit)
-		ceilingM, ceilingDatum := toMeters(f.Properties.UpperLimit)
-		result.Features = append(result.Features, outFeature{
+		floorM, floorDatum := airspaceToMeters(f.Properties.LowerLimit)
+		ceilingM, ceilingDatum := airspaceToMeters(f.Properties.UpperLimit)
+		result.Features = append(result.Features, airspaceOutFeature{
 			Type: "Feature",
-			Properties: outProperties{
+			Properties: airspaceOutProperties{
 				Name:         f.Properties.Name,
-				Class:        classLabel(f.Properties.IcaoClass),
-				Floor:        formatLimit(f.Properties.LowerLimit),
-				Ceiling:      formatLimit(f.Properties.UpperLimit),
+				Class:        airspaceClassLabel(f.Properties.IcaoClass),
+				Floor:        airspaceFormatLimit(f.Properties.LowerLimit),
+				Ceiling:      airspaceFormatLimit(f.Properties.UpperLimit),
 				FloorM:       floorM,
 				FloorDatum:   floorDatum,
 				CeilingM:     ceilingM,
@@ -258,11 +267,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.MkdirAll("data", 0755); err != nil {
+	if err := os.MkdirAll("output", 0755); err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(out, outJSON, 0644); err != nil {
+	if err := os.WriteFile(outPath, outJSON, 0644); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %s (%d bytes)", out, len(outJSON))
+	log.Printf("wrote %s (%d bytes)", outPath, len(outJSON))
 }
