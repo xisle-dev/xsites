@@ -6,6 +6,7 @@
 import {
   Map,
   Marker,
+  MercatorCoordinate,
   NavigationControl,
   ScaleControl,
   addProtocol,
@@ -393,43 +394,24 @@ const style = {
     },
     {
       // Traces whichever airspace entry the pointer is over in the click
-      // popup's list -- fed by setAirspaceHighlight, empty otherwise. Only
-      // the one "outline" feature (the shape's real boundary), not the
-      // volume layer's grid cells -- see setAirspaceHighlight.
+      // popup's list -- fed by setAirspaceHighlight, empty otherwise.
       id: AIRSPACE_HIGHLIGHT_LAYER_ID,
       type: "line",
       source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
-      filter: ["==", ["get", "kind"], "outline"],
       paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.95 },
     },
-    {
-      // Real floor-to-ceiling volume, but only for the single currently
-      // highlighted entry -- every other airspace region stays flat 2D, so
-      // hovering doesn't turn the whole map into a forest of glass boxes.
-      // Extrudes the "volume-cell" grid (see extrusionCellFeatures), not
-      // the single "outline" feature -- each cell carries its own
-      // terrain-corrected extrusionBase/extrusionTop.
-      id: AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID,
-      type: "fill-extrusion",
-      source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
-      filter: ["==", ["get", "kind"], "volume-cell"],
-      paint: {
-        "fill-extrusion-color": "#ffffff",
-        "fill-extrusion-opacity": 0.35,
-        "fill-extrusion-base": ["get", "extrusionBase"],
-        "fill-extrusion-height": ["get", "extrusionTop"],
-      },
-    },
+    // The real floor-to-ceiling volume is AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID,
+    // added separately via map.addLayer as a custom WebGL layer, not a
+    // style-spec fill-extrusion one here -- see its definition (and the
+    // comment on why) below, near buildAirspaceVolumeMesh.
     ...tunedLabelLayers,
     {
       // All the text info the panel row shows (name, class, floor/ceiling),
       // put directly on the map next to whatever's highlighted -- last in
-      // the stack so it's never covered by a place-name label. Placed on
-      // the "outline" feature, not once per volume-cell.
+      // the stack so it's never covered by a place-name label.
       id: AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID,
       type: "symbol",
       source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
-      filter: ["==", ["get", "kind"], "outline"],
       layout: {
         "text-field": ["concat", ["get", "name"], " (", ["get", "class"], ")\n", ["get", "floor"], " – ", ["get", "ceiling"]],
         "text-size": 13,
@@ -1097,11 +1079,306 @@ map.on("mouseout", () => {
   glideHoverTip.hidden = true;
 });
 
+// --- 3D airspace highlight volume: a custom WebGL layer -----------------
+//
+// MapLibre's fill-extrusion layer type, once terrain is on, re-samples
+// the *local* ground height under every vertex it draws and adds
+// base/height as a constant offset from that -- correct for a GND/AGL-
+// referenced surface (meant to hug the terrain), but wrong for an
+// MSL-referenced one, which should be a flat plane at a fixed altitude
+// everywhere rather than a terrain-shaped surface floating at a constant
+// offset above it. There's no style-spec property to opt a fill-extrusion
+// layer out of that per-vertex terrain sampling -- the only way to draw
+// geometry at a genuinely fixed altitude, independent of terrain, is a
+// custom layer: our own vertex buffers, positioned via
+// MercatorCoordinate's altitude parameter (a pure Mercator-space
+// calculation with no terrain lookup involved) and MapLibre's own current
+// camera matrix, bypassing fill-extrusion's terrain-following behavior
+// entirely.
+//
+// The `matrix` a custom layer's render(gl, matrix) callback receives in
+// this MapLibre version expects coordinates relative to a specific map
+// *tile*, not plain global Mercator values -- feeding it raw
+// MercatorCoordinate x/y collapses all geometry to a single point instead
+// of a properly-scaled screen position, and the designed entry point for
+// that (Transform#getProjectionDataForCustomLayer) needs an internal
+// tile-ID object this code has no legitimate way to construct. Reading
+// map.painter.transform._viewProjMatrix directly instead -- MapLibre's
+// current camera view+projection matrix in *world-pixel* space -- and
+// scaling input coordinates to match (Mercator 0..1 x/y times
+// transform.worldSize, altitude in meters times
+// transform._helper.pixelsPerMeter) reproduces map.project()'s own screen
+// position exactly (verified directly against it). Undocumented, private
+// API, but the only route to real terrain-independent 3D geometry
+// available in this MapLibre version.
+
+const AIRSPACE_VOLUME_DENSIFY_STEP_M = 50; // ~DEM resolution -- see ELEV_TILE_ZOOM
+
+// Splits each edge of `ring` (open, [lng,lat] pairs) into segments no
+// longer than stepM (great-circle distance), so a GND-referenced surface
+// can trace real terrain along the whole boundary instead of just at the
+// shape's own (often widely-spaced) vertices.
+function densifyRing(ring, stepM) {
+  const out = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    const distM = haversineDistance(a[0], a[1], b[0], b[1]);
+    const steps = Math.max(1, Math.ceil(distM / stepM));
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps;
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return out;
+}
+
+// Ear-clipping triangulation for a simple (non-self-intersecting) polygon
+// ring, possibly concave, no holes -- true of every airspace boundary in
+// the current data. `ring` is open ([lng,lat] pairs, no duplicated
+// closing point). Returns triangles as [i,j,k] index triples into `ring`.
+function triangulatePolygon(ring) {
+  let signedArea = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x1, y1] = ring[i];
+    const [x2, y2] = ring[(i + 1) % ring.length];
+    signedArea += x1 * y2 - x2 * y1;
+  }
+  const ccw = signedArea > 0;
+
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const pointInTriangle = (p, a, b, c) => {
+    const d1 = cross(a, b, p);
+    const d2 = cross(b, c, p);
+    const d3 = cross(c, a, p);
+    const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+    const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+    return !(hasNeg && hasPos);
+  };
+
+  let indices = ring.map((_, i) => i);
+  const triangles = [];
+  let guard = 0;
+  while (indices.length > 3 && guard++ < ring.length * ring.length) {
+    let clipped = false;
+    for (let i = 0; i < indices.length; i++) {
+      const iPrev = indices[(i - 1 + indices.length) % indices.length];
+      const iCurr = indices[i];
+      const iNext = indices[(i + 1) % indices.length];
+      const a = ring[iPrev];
+      const b = ring[iCurr];
+      const c = ring[iNext];
+      const isConvex = ccw ? cross(a, b, c) > 0 : cross(a, b, c) < 0;
+      if (!isConvex) continue;
+      let containsOther = false;
+      for (const idx of indices) {
+        if (idx === iPrev || idx === iCurr || idx === iNext) continue;
+        if (pointInTriangle(ring[idx], a, b, c)) {
+          containsOther = true;
+          break;
+        }
+      }
+      if (containsOther) continue;
+      triangles.push([iPrev, iCurr, iNext]);
+      indices.splice(i, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) break; // degenerate input -- stop rather than loop forever
+  }
+  if (indices.length === 3) triangles.push([indices[0], indices[1], indices[2]]);
+  return triangles;
+}
+
+// True (unexaggerated) meters MSL for one vertex of a floor/ceiling
+// surface: the literal value for an MSL-datum boundary, or that many
+// meters above local ground for a GND one.
+function surfaceAltitudeM(datum, valueM, groundTrueM) {
+  return datum === "MSL" ? valueM : groundTrueM + valueM;
+}
+
+// Builds the highlight volume's mesh -- walls all the way around plus a
+// top cap -- as a flat Float32Array of world-pixel-space triangle
+// vertices ready for airspaceVolumeLayer to upload directly. No bottom
+// cap: the floor is essentially always at or near ground level, so
+// there's nothing to see looking up into an open underside from outside
+// the shape. Async because a GND-referenced surface needs real DEM tiles
+// fetched for the shape's bounding box first.
+async function buildAirspaceVolumeMesh(geometry, props) {
+  const { floorM, floorDatum, ceilingM, ceilingDatum } = props;
+  if (typeof floorM !== "number" || typeof ceilingM !== "number") return null;
+  if (geometry.type !== "Polygon") return null; // none of the current data uses MultiPolygon
+  const closedRing = geometry.coordinates[0];
+  const last = closedRing[closedRing.length - 1];
+  const ring = closedRing.length > 1 && closedRing[0][0] === last[0] && closedRing[0][1] === last[1] ? closedRing.slice(0, -1) : closedRing;
+  if (ring.length < 3) return null;
+
+  // An all-MSL volume is flat top and bottom regardless of terrain, so
+  // there's no reason to fetch/sample the DEM at all for one.
+  const needsGround = floorDatum !== "MSL" || ceilingDatum !== "MSL";
+  if (needsGround) {
+    let minLng = Infinity;
+    let minLat = Infinity;
+    let maxLng = -Infinity;
+    let maxLat = -Infinity;
+    for (const [lng, lat] of ring) {
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+    await prefetchElevTiles(minLng, maxLng, minLat, maxLat);
+  }
+
+  const boundary = needsGround ? densifyRing(ring, AIRSPACE_VOLUME_DENSIFY_STEP_M) : ring;
+  const groundAt = (lng, lat) => (needsGround ? (sampleElevation(lng, lat) ?? 0) : 0);
+
+  // Mercator x/y (0..1) and true meters, *not* pre-scaled by worldSize/
+  // pixelsPerMeter -- both are functions of the current zoom, so baking
+  // them into the mesh at build time leaves it silently wrong for every
+  // zoom level other than whatever was current right then (verified: a
+  // mesh built at one zoom decoded to a position thousands of km away
+  // once the camera zoomed elsewhere). airspaceVolumeLayer's shader takes
+  // worldSize/pixelsPerMeter as uniforms instead, refreshed every frame,
+  // so this same mesh keeps rendering correctly across zoom changes.
+  const toWorld = (lng, lat, altTrueM) => {
+    const m = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
+    return [m.x, m.y, altTrueM * exaggeration];
+  };
+
+  const verts = [];
+  const pushTri = (a, b, c) => verts.push(...a, ...b, ...c);
+
+  const n = boundary.length;
+  const topWorld = new Array(n);
+  const botWorld = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const [lng, lat] = boundary[i];
+    const g = groundAt(lng, lat);
+    topWorld[i] = toWorld(lng, lat, surfaceAltitudeM(ceilingDatum, ceilingM, g));
+    botWorld[i] = toWorld(lng, lat, surfaceAltitudeM(floorDatum, floorM, g));
+  }
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    pushTri(topWorld[i], topWorld[j], botWorld[j]);
+    pushTri(topWorld[i], botWorld[j], botWorld[i]);
+  }
+
+  // Top cap: the shape's own (sparse) boundary is enough here -- exactly
+  // flat regardless of point count when ceilingDatum is MSL (the common
+  // case), boundary-accurate-only in the rarer GND-ceiling case.
+  const capRing = ceilingDatum === "MSL" ? ring : boundary;
+  const capTriangles = triangulatePolygon(capRing);
+  for (const [ia, ib, ic] of capTriangles) {
+    const va = capRing[ia];
+    const vb = capRing[ib];
+    const vc = capRing[ic];
+    pushTri(
+      toWorld(va[0], va[1], surfaceAltitudeM(ceilingDatum, ceilingM, groundAt(va[0], va[1]))),
+      toWorld(vb[0], vb[1], surfaceAltitudeM(ceilingDatum, ceilingM, groundAt(vb[0], vb[1]))),
+      toWorld(vc[0], vc[1], surfaceAltitudeM(ceilingDatum, ceilingM, groundAt(vc[0], vc[1]))),
+    );
+  }
+
+  return new Float32Array(verts);
+}
+
+let airspaceVolumeVertexData = null;
+let airspaceVolumeRequestToken = 0;
+
+const airspaceVolumeLayer = {
+  id: AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID,
+  type: "custom",
+  renderingMode: "3d",
+  onAdd(_map, gl) {
+    // aPos is Mercator x/y (0..1) and true meters -- zoom-independent, see
+    // buildAirspaceVolumeMesh -- scaled up to world-pixel space right here
+    // in the shader using uniforms refreshed every frame, instead of
+    // baking a specific zoom's scale into the vertex data itself.
+    const vertexSrc = `
+      uniform mat4 uMatrix;
+      uniform float uWorldSize;
+      uniform float uPixelsPerMeter;
+      attribute vec3 aPos;
+      void main() {
+        vec3 worldPos = vec3(aPos.x * uWorldSize, aPos.y * uWorldSize, aPos.z * uPixelsPerMeter);
+        gl_Position = uMatrix * vec4(worldPos, 1.0);
+      }
+    `;
+    const fragmentSrc = `
+      precision mediump float;
+      void main() {
+        gl_FragColor = vec4(1.0, 1.0, 1.0, 0.35);
+      }
+    `;
+    const compile = (type, src) => {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, src);
+      gl.compileShader(shader);
+      return shader;
+    };
+    const program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSrc));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSrc));
+    gl.linkProgram(program);
+    this.program = program;
+    this.aPos = gl.getAttribLocation(program, "aPos");
+    this.uMatrix = gl.getUniformLocation(program, "uMatrix");
+    this.uWorldSize = gl.getUniformLocation(program, "uWorldSize");
+    this.uPixelsPerMeter = gl.getUniformLocation(program, "uPixelsPerMeter");
+    this.vao = gl.createVertexArray();
+    this.buffer = gl.createBuffer();
+    this.uploadedData = null;
+    this.vertexCount = 0;
+  },
+  render(gl) {
+    if (!airspaceVolumeVertexData || airspaceVolumeVertexData.length === 0) return;
+    if (this.uploadedData !== airspaceVolumeVertexData) {
+      gl.bindVertexArray(this.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, airspaceVolumeVertexData, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(this.aPos);
+      gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+      this.uploadedData = airspaceVolumeVertexData;
+      this.vertexCount = airspaceVolumeVertexData.length / 3;
+    }
+    // Fetched fresh every frame -- the camera (and thus this matrix, and
+    // worldSize/pixelsPerMeter at the current zoom) changes on every
+    // pan/zoom/tilt, unlike the vertex data above.
+    const t = map.painter.transform;
+    const matrix = new Float32Array(t._viewProjMatrix);
+    gl.useProgram(this.program);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false); // test against terrain, but don't let this transparent volume's own triangles occlude each other
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(this.vao);
+    gl.uniformMatrix4fv(this.uMatrix, false, matrix);
+    gl.uniform1f(this.uWorldSize, t.worldSize);
+    gl.uniform1f(this.uPixelsPerMeter, t._helper.pixelsPerMeter);
+    gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+  },
+};
+// Unlike a plain GeoJSON-sourced layer, addLayer() for a "custom" one
+// throws ("Style is not done loading") if called before the style has
+// actually finished loading -- calling it here at module scope (i.e.
+// synchronously, right after `new Map(...)`) throws immediately and
+// silently aborts the rest of this module's top-level code, well before
+// site markers/list or any other setup below ever runs. Deferring to
+// "load" avoids that; no beforeId needed since drawn after every 2D
+// layer is fine for a real 3D/depth-tested one.
+map.on("load", () => map.addLayer(airspaceVolumeLayer));
+
 // Traces the given geometry (or clears the trace if null) in the highlight
 // layer, carrying `properties` along so the label layer can show the same
-// name/class/floor/ceiling the panel row does -- used so hovering a panel
-// entry shows which polygon on the map it refers to, with its full details,
-// without having to look back at the panel to read them.
+// name/class/floor/ceiling the panel row does, and rebuilds the 3D volume
+// mesh (see buildAirspaceVolumeMesh) for airspaceVolumeLayer to draw --
+// used so hovering a panel entry shows which polygon on the map it refers
+// to, with its full details and true 3D extent, without having to look
+// back at the panel to read them.
 //
 // `properties` here is a Feature.properties object handed back by
 // queryRenderedFeatures, which isn't a plain Object -- passing it straight
@@ -1109,183 +1386,24 @@ map.on("mouseout", () => {
 // (setData()/isSourceLoaded() both still report success, but nothing is
 // ever tiled or rendered, and there's no error to catch). Spreading it into
 // a genuine plain object first fixes it.
-// Rough centroid (mean vertex of its largest ring) of a Polygon/
-// MultiPolygon, used only as a sample point for queryTerrainElevation --
-// doesn't need to be precise, just reliably inside the shape.
-function polygonCentroid(geometry) {
-  const rings =
-    geometry.type === "Polygon"
-      ? [geometry.coordinates[0]]
-      : geometry.type === "MultiPolygon"
-        ? geometry.coordinates.map((poly) => poly[0])
-        : [];
-  let bestRing = null;
-  let bestArea = -1;
-  for (const ring of rings) {
-    let area = 0;
-    for (let i = 0; i < ring.length - 1; i++) {
-      area += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
-    }
-    area = Math.abs(area);
-    if (area > bestArea) {
-      bestArea = area;
-      bestRing = ring;
-    }
-  }
-  if (!bestRing) return null;
-  let x = 0;
-  let y = 0;
-  for (const [lon, lat] of bestRing) {
-    x += lon;
-    y += lat;
-  }
-  return [x / bestRing.length, y / bestRing.length];
-}
-
-// Caps the highlight volume's height above its base so an SFC-FL999 FIR
-// boundary (or similarly tall SUA) still renders as a visible wall instead
-// of an unusable ~30km-tall column.
-const MAX_HIGHLIGHT_EXTRUSION_M = 3500;
-
-// Converts a feature's floorM/ceilingM (each either already ground-relative
-// ("GND") or sea-level-referenced ("MSL") -- see tools/fetchairspace's
-// outProperties comment) into base/top meters for the highlight
-// fill-extrusion layer, which is itself ground-relative once terrain is on.
-// MSL values need the local ground elevation at the shape subtracted.
-function computeExtrusionRange(geometry, props) {
-  const { floorM, floorDatum, ceilingM, ceilingDatum } = props;
-  if (typeof floorM !== "number" || typeof ceilingM !== "number") return [0, 0];
-  const centroid = polygonCentroid(geometry);
-  let groundElevation = 0;
-  if (centroid) {
-    // queryTerrainElevation reports the terrain as currently rendered --
-    // i.e. with the exaggeration slider's multiplier already baked in --
-    // not the raw DEM value, so divide it back out to get the true ground
-    // elevation MSL floor/ceiling need to be measured against.
-    const elevation = map.queryTerrainElevation({ lng: centroid[0], lat: centroid[1] });
-    if (typeof elevation === "number") groundElevation = elevation / exaggeration;
-  }
-  const base = floorDatum === "MSL" ? Math.max(0, floorM - groundElevation) : floorM;
-  const rawTop = ceilingDatum === "MSL" ? Math.max(base, ceilingM - groundElevation) : ceilingM;
-  const top = Math.min(rawTop, base + MAX_HIGHLIGHT_EXTRUSION_M);
-  // The fill-extrusion layer's own base/height aren't auto-scaled by
-  // terrain exaggeration the way the terrain mesh itself is, so without
-  // this the volume's true-MSL ceiling stays put while an exaggerated
-  // peak grows taller around it -- a summit safely below a low MSL
-  // ceiling in reality could visibly poke out above the rendered volume
-  // once exaggeration inflated it, even though nothing was actually wrong
-  // with the airspace data. Scaling both ends by the same factor terrain
-  // itself is exaggerated by keeps the volume visually consistent with
-  // however tall the ground around it is currently being drawn.
-  return [base * exaggeration, top * exaggeration];
-}
-
-// Clips a (possibly non-convex) polygon ring against an axis-aligned
-// [xmin,ymin,xmax,ymax] rectangle via Sutherland-Hodgman -- correct for
-// any subject polygon since the clip window is always convex. `ring` must
-// be open (no duplicated closing point). Returns an open ring, or [] if
-// the polygon doesn't intersect the rectangle at all.
-function clipRingToRect(ring, xmin, ymin, xmax, ymax) {
-  const inside = [(p) => p[0] >= xmin, (p) => p[0] <= xmax, (p) => p[1] >= ymin, (p) => p[1] <= ymax];
-  const at = [
-    (a, b) => [xmin, a[1] + ((b[1] - a[1]) * (xmin - a[0])) / (b[0] - a[0])],
-    (a, b) => [xmax, a[1] + ((b[1] - a[1]) * (xmax - a[0])) / (b[0] - a[0])],
-    (a, b) => [a[0] + ((b[0] - a[0]) * (ymin - a[1])) / (b[1] - a[1]), ymin],
-    (a, b) => [a[0] + ((b[0] - a[0]) * (ymax - a[1])) / (b[1] - a[1]), ymax],
-  ];
-  let output = ring;
-  for (let edge = 0; edge < 4 && output.length > 0; edge++) {
-    const input = output;
-    output = [];
-    for (let i = 0; i < input.length; i++) {
-      const curr = input[i];
-      const prev = input[(i - 1 + input.length) % input.length];
-      const currIn = inside[edge](curr);
-      if (inside[edge](prev) !== currIn) output.push(at[edge](prev, curr));
-      if (currIn) output.push(curr);
-    }
-  }
-  return output;
-}
-
-// MapLibre's fill-extrusion, once terrain is on, re-samples the *local*
-// ground height under every vertex it draws and adds base/height as a
-// constant offset from that -- correct for a GND/AGL-referenced surface
-// (meant to hug the terrain), but wrong for an MSL-referenced one, which
-// should be a flat plane at a fixed altitude everywhere rather than a
-// terrain-shaped surface floating at a constant offset above it. Sampling
-// ground elevation once for the whole polygon (computeExtrusionRange)
-// can't fix that: any real elevation change across the shape still gets
-// carried into whichever surface is meant to be flat, so an MSL boundary
-// ends up looking as jagged as the terrain underneath it. Splitting the
-// polygon into a grid of small cells, each independently sampled and
-// extruded, approximates a true flat MSL plane -- the "steps" between
-// neighboring cells are small enough not to read as terrain-shaped --
-// while a GND-referenced surface still naturally hugs the terrain the way
-// it should, since each small cell's own base still sits on its own
-// local ground.
-const EXTRUSION_GRID_DIVS = 10;
-
-function extrusionCellFeatures(geometry, properties) {
-  if (geometry.type !== "Polygon") {
-    // MultiPolygon/other: not worth subdividing (no current airspace
-    // data uses it) -- one sample for the whole shape beats none at all.
-    const [base, top] = computeExtrusionRange(geometry, properties);
-    return [{ type: "Feature", properties: { ...properties, kind: "volume-cell", extrusionBase: base, extrusionTop: top }, geometry }];
-  }
-  const closedRing = geometry.coordinates[0];
-  const last = closedRing[closedRing.length - 1];
-  const ring = closedRing.length > 1 && closedRing[0][0] === last[0] && closedRing[0][1] === last[1] ? closedRing.slice(0, -1) : closedRing;
-
-  let minLng = Infinity;
-  let minLat = Infinity;
-  let maxLng = -Infinity;
-  let maxLat = -Infinity;
-  for (const [lng, lat] of ring) {
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-  }
-  const cellW = (maxLng - minLng) / EXTRUSION_GRID_DIVS;
-  const cellH = (maxLat - minLat) / EXTRUSION_GRID_DIVS;
-
-  const features = [];
-  if (cellW > 0 && cellH > 0) {
-    for (let iy = 0; iy < EXTRUSION_GRID_DIVS; iy++) {
-      for (let ix = 0; ix < EXTRUSION_GRID_DIVS; ix++) {
-        const clipped = clipRingToRect(ring, minLng + ix * cellW, minLat + iy * cellH, minLng + (ix + 1) * cellW, minLat + (iy + 1) * cellH);
-        if (clipped.length < 3) continue;
-        const cellGeometry = { type: "Polygon", coordinates: [[...clipped, clipped[0]]] };
-        const [base, top] = computeExtrusionRange(cellGeometry, properties);
-        features.push({ type: "Feature", properties: { ...properties, kind: "volume-cell", extrusionBase: base, extrusionTop: top }, geometry: cellGeometry });
-      }
-    }
-  }
-  if (features.length > 0) return features;
-  // Degenerate bbox (a sliver) or every cell clipped away to nothing --
-  // fall back to one sample rather than rendering no volume at all.
-  const [base, top] = computeExtrusionRange(geometry, properties);
-  return [{ type: "Feature", properties: { ...properties, kind: "volume-cell", extrusionBase: base, extrusionTop: top }, geometry }];
-}
-
 function setAirspaceHighlight(geometry, properties) {
   const source = map.getSource(AIRSPACE_HIGHLIGHT_SOURCE_ID);
   if (!source) return;
+  const token = ++airspaceVolumeRequestToken;
   if (!geometry) {
     source.setData({ type: "FeatureCollection", features: [] });
+    airspaceVolumeVertexData = null;
+    map.triggerRepaint();
     return;
   }
   const plainProps = { ...properties };
-  // The line/label layers trace the shape's real boundary (kind:
-  // "outline"); the volume layer extrudes a grid of small cells instead
-  // (kind: "volume-cell" -- see extrusionCellFeatures) so an MSL ceiling
-  // renders as a flat plane rather than a copy of the terrain underneath.
-  // Both kinds share one source, filtered apart per layer, same as
-  // GLIDE_SOURCE_ID's fill/outline split.
-  const outlineFeature = { type: "Feature", geometry, properties: { ...plainProps, kind: "outline" } };
-  const volumeFeatures = extrusionCellFeatures(geometry, plainProps);
-  source.setData({ type: "FeatureCollection", features: [outlineFeature, ...volumeFeatures] });
+  source.setData({ type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: plainProps }] });
+
+  buildAirspaceVolumeMesh(geometry, plainProps).then((verts) => {
+    if (token !== airspaceVolumeRequestToken) return; // superseded by a later hover/click
+    airspaceVolumeVertexData = verts;
+    map.triggerRepaint();
+  });
 }
 
 // Airspace selections share the same panel/sheet as the sites list and
