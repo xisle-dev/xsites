@@ -10,6 +10,7 @@
 import {
   Map,
   Marker,
+  NavigationControl,
   ScaleControl,
   addProtocol,
 } from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
@@ -485,7 +486,12 @@ setTimeout(readyOverlay, 8000);
 // open -- see selectedSiteId).
 map.on("moveend", updateUrl);
 
-map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
+// top-right, not bottom-left: the sites panel is left-anchored and (on
+// narrow/mobile layouts) bottom-docked, so either bottom corner sits
+// mostly hidden behind it -- ScaleControl used to be exactly that, a
+// barely-visible sliver poking out from under the panel.
+map.addControl(new NavigationControl({ showZoom: false, showCompass: true }), "top-right");
+map.addControl(new ScaleControl({ unit: "metric" }), "top-right");
 
 document.getElementById("zoomInBtn").addEventListener("click", () => map.zoomIn({ duration: 200 }));
 document.getElementById("zoomOutBtn").addEventListener("click", () => map.zoomOut({ duration: 200 }));
