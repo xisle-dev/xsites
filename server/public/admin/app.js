@@ -393,21 +393,26 @@ const style = {
     },
     {
       // Traces whichever airspace entry the pointer is over in the click
-      // popup's list -- fed by setAirspaceHighlight, empty otherwise.
+      // popup's list -- fed by setAirspaceHighlight, empty otherwise. Only
+      // the one "outline" feature (the shape's real boundary), not the
+      // volume layer's grid cells -- see setAirspaceHighlight.
       id: AIRSPACE_HIGHLIGHT_LAYER_ID,
       type: "line",
       source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
+      filter: ["==", ["get", "kind"], "outline"],
       paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.95 },
     },
     {
       // Real floor-to-ceiling volume, but only for the single currently
       // highlighted entry -- every other airspace region stays flat 2D, so
       // hovering doesn't turn the whole map into a forest of glass boxes.
-      // extrusionBase/extrusionTop are computed (terrain-corrected) and
-      // attached to the feature in setAirspaceHighlight.
+      // Extrudes the "volume-cell" grid (see extrusionCellFeatures), not
+      // the single "outline" feature -- each cell carries its own
+      // terrain-corrected extrusionBase/extrusionTop.
       id: AIRSPACE_HIGHLIGHT_VOLUME_LAYER_ID,
       type: "fill-extrusion",
       source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
+      filter: ["==", ["get", "kind"], "volume-cell"],
       paint: {
         "fill-extrusion-color": "#ffffff",
         "fill-extrusion-opacity": 0.35,
@@ -419,10 +424,12 @@ const style = {
     {
       // All the text info the panel row shows (name, class, floor/ceiling),
       // put directly on the map next to whatever's highlighted -- last in
-      // the stack so it's never covered by a place-name label.
+      // the stack so it's never covered by a place-name label. Placed on
+      // the "outline" feature, not once per volume-cell.
       id: AIRSPACE_HIGHLIGHT_LABEL_LAYER_ID,
       type: "symbol",
       source: AIRSPACE_HIGHLIGHT_SOURCE_ID,
+      filter: ["==", ["get", "kind"], "outline"],
       layout: {
         "text-field": ["concat", ["get", "name"], " (", ["get", "class"], ")\n", ["get", "floor"], " – ", ["get", "ceiling"]],
         "text-size": 13,
@@ -1173,6 +1180,95 @@ function computeExtrusionRange(geometry, props) {
   return [base * exaggeration, top * exaggeration];
 }
 
+// Clips a (possibly non-convex) polygon ring against an axis-aligned
+// [xmin,ymin,xmax,ymax] rectangle via Sutherland-Hodgman -- correct for
+// any subject polygon since the clip window is always convex. `ring` must
+// be open (no duplicated closing point). Returns an open ring, or [] if
+// the polygon doesn't intersect the rectangle at all.
+function clipRingToRect(ring, xmin, ymin, xmax, ymax) {
+  const inside = [(p) => p[0] >= xmin, (p) => p[0] <= xmax, (p) => p[1] >= ymin, (p) => p[1] <= ymax];
+  const at = [
+    (a, b) => [xmin, a[1] + ((b[1] - a[1]) * (xmin - a[0])) / (b[0] - a[0])],
+    (a, b) => [xmax, a[1] + ((b[1] - a[1]) * (xmax - a[0])) / (b[0] - a[0])],
+    (a, b) => [a[0] + ((b[0] - a[0]) * (ymin - a[1])) / (b[1] - a[1]), ymin],
+    (a, b) => [a[0] + ((b[0] - a[0]) * (ymax - a[1])) / (b[1] - a[1]), ymax],
+  ];
+  let output = ring;
+  for (let edge = 0; edge < 4 && output.length > 0; edge++) {
+    const input = output;
+    output = [];
+    for (let i = 0; i < input.length; i++) {
+      const curr = input[i];
+      const prev = input[(i - 1 + input.length) % input.length];
+      const currIn = inside[edge](curr);
+      if (inside[edge](prev) !== currIn) output.push(at[edge](prev, curr));
+      if (currIn) output.push(curr);
+    }
+  }
+  return output;
+}
+
+// MapLibre's fill-extrusion, once terrain is on, re-samples the *local*
+// ground height under every vertex it draws and adds base/height as a
+// constant offset from that -- correct for a GND/AGL-referenced surface
+// (meant to hug the terrain), but wrong for an MSL-referenced one, which
+// should be a flat plane at a fixed altitude everywhere rather than a
+// terrain-shaped surface floating at a constant offset above it. Sampling
+// ground elevation once for the whole polygon (computeExtrusionRange)
+// can't fix that: any real elevation change across the shape still gets
+// carried into whichever surface is meant to be flat, so an MSL boundary
+// ends up looking as jagged as the terrain underneath it. Splitting the
+// polygon into a grid of small cells, each independently sampled and
+// extruded, approximates a true flat MSL plane -- the "steps" between
+// neighboring cells are small enough not to read as terrain-shaped --
+// while a GND-referenced surface still naturally hugs the terrain the way
+// it should, since each small cell's own base still sits on its own
+// local ground.
+const EXTRUSION_GRID_DIVS = 10;
+
+function extrusionCellFeatures(geometry, properties) {
+  if (geometry.type !== "Polygon") {
+    // MultiPolygon/other: not worth subdividing (no current airspace
+    // data uses it) -- one sample for the whole shape beats none at all.
+    const [base, top] = computeExtrusionRange(geometry, properties);
+    return [{ type: "Feature", properties: { ...properties, kind: "volume-cell", extrusionBase: base, extrusionTop: top }, geometry }];
+  }
+  const closedRing = geometry.coordinates[0];
+  const last = closedRing[closedRing.length - 1];
+  const ring = closedRing.length > 1 && closedRing[0][0] === last[0] && closedRing[0][1] === last[1] ? closedRing.slice(0, -1) : closedRing;
+
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+  for (const [lng, lat] of ring) {
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  }
+  const cellW = (maxLng - minLng) / EXTRUSION_GRID_DIVS;
+  const cellH = (maxLat - minLat) / EXTRUSION_GRID_DIVS;
+
+  const features = [];
+  if (cellW > 0 && cellH > 0) {
+    for (let iy = 0; iy < EXTRUSION_GRID_DIVS; iy++) {
+      for (let ix = 0; ix < EXTRUSION_GRID_DIVS; ix++) {
+        const clipped = clipRingToRect(ring, minLng + ix * cellW, minLat + iy * cellH, minLng + (ix + 1) * cellW, minLat + (iy + 1) * cellH);
+        if (clipped.length < 3) continue;
+        const cellGeometry = { type: "Polygon", coordinates: [[...clipped, clipped[0]]] };
+        const [base, top] = computeExtrusionRange(cellGeometry, properties);
+        features.push({ type: "Feature", properties: { ...properties, kind: "volume-cell", extrusionBase: base, extrusionTop: top }, geometry: cellGeometry });
+      }
+    }
+  }
+  if (features.length > 0) return features;
+  // Degenerate bbox (a sliver) or every cell clipped away to nothing --
+  // fall back to one sample rather than rendering no volume at all.
+  const [base, top] = computeExtrusionRange(geometry, properties);
+  return [{ type: "Feature", properties: { ...properties, kind: "volume-cell", extrusionBase: base, extrusionTop: top }, geometry }];
+}
+
 function setAirspaceHighlight(geometry, properties) {
   const source = map.getSource(AIRSPACE_HIGHLIGHT_SOURCE_ID);
   if (!source) return;
@@ -1181,10 +1277,15 @@ function setAirspaceHighlight(geometry, properties) {
     return;
   }
   const plainProps = { ...properties };
-  const [extrusionBase, extrusionTop] = computeExtrusionRange(geometry, plainProps);
-  plainProps.extrusionBase = extrusionBase;
-  plainProps.extrusionTop = extrusionTop;
-  source.setData({ type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: plainProps }] });
+  // The line/label layers trace the shape's real boundary (kind:
+  // "outline"); the volume layer extrudes a grid of small cells instead
+  // (kind: "volume-cell" -- see extrusionCellFeatures) so an MSL ceiling
+  // renders as a flat plane rather than a copy of the terrain underneath.
+  // Both kinds share one source, filtered apart per layer, same as
+  // GLIDE_SOURCE_ID's fill/outline split.
+  const outlineFeature = { type: "Feature", geometry, properties: { ...plainProps, kind: "outline" } };
+  const volumeFeatures = extrusionCellFeatures(geometry, plainProps);
+  source.setData({ type: "FeatureCollection", features: [outlineFeature, ...volumeFeatures] });
 }
 
 // Airspace selections share the same panel/sheet as the sites list and
