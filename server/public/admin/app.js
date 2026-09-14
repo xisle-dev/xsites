@@ -1597,6 +1597,38 @@ function fitToVisibleSites() {
   if (bounds) map.fitBounds(bounds, { duration: 0 });
 }
 
+// The draft pin shown while the add/edit form is open, tracking whatever
+// is currently in the Latitude/Longitude fields -- set on the click that
+// picks a location, and on typing either field directly, so the form's
+// idea of "where this site is" is never invisible until Save. Separate
+// from markersById (the persisted, post-save markers renderMarkers below
+// manages) since this exists only while the form is open, isn't tied to
+// any saved site, and needs to render even mid-edit.
+let draftMarker = null;
+
+function updateDraftMarker(lat, lng) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  if (!draftMarker) {
+    const el = document.createElement("div");
+    el.className = "site-marker site-marker-draft";
+    // setLngLat before addTo, not after -- addTo() calls MapLibre's
+    // internal _update() immediately, which throws on an unset position
+    // (Cannot read properties of undefined (reading 'lng')) if the marker
+    // hasn't been positioned yet. Once created, updating a marker that
+    // already has a position is fine either way.
+    draftMarker = new Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(map);
+  } else {
+    draftMarker.setLngLat([lng, lat]);
+  }
+}
+
+function clearDraftMarker() {
+  if (draftMarker) {
+    draftMarker.remove();
+    draftMarker = null;
+  }
+}
+
 function renderMarkers() {
   for (const id in markersById) markersById[id].remove();
   for (const id in markersById) delete markersById[id];
@@ -1684,6 +1716,7 @@ function flyToSite(site) {
 
 function showListView() {
   stopPlacing();
+  clearDraftMarker();
   sitesListView.hidden = false;
   siteDetailView.hidden = true;
   siteForm.hidden = true;
@@ -1696,6 +1729,7 @@ function showListView() {
 
 function showDetail(id) {
   stopPlacing();
+  clearDraftMarker();
   const site = sites.find((s) => s.id === id);
   if (!site) return;
   selectedSiteId = id;
@@ -1776,6 +1810,8 @@ function showForm(site) {
   document.getElementById("fLatitude").value = site?.latitude ?? "";
   document.getElementById("fLongitude").value = site?.longitude ?? "";
   document.getElementById("fElevation").value = site?.elevation_m ?? "";
+  if (site) updateDraftMarker(site.latitude, site.longitude);
+  else clearDraftMarker();
 
   formSite = site || null;
   renderMediaList();
@@ -1937,6 +1973,14 @@ siteForm.addEventListener("submit", async (e) => {
   showDetail(saved.id);
 });
 
+const fLatitudeInput = document.getElementById("fLatitude");
+const fLongitudeInput = document.getElementById("fLongitude");
+function updateDraftMarkerFromInputs() {
+  updateDraftMarker(parseFloat(fLatitudeInput.value), parseFloat(fLongitudeInput.value));
+}
+fLatitudeInput.addEventListener("input", updateDraftMarkerFromInputs);
+fLongitudeInput.addEventListener("input", updateDraftMarkerFromInputs);
+
 const pickPinBtn = document.getElementById("pickPinBtn");
 
 function startPlacing(mode, bannerText) {
@@ -1992,6 +2036,7 @@ map.on("click", (e) => {
   }
   document.getElementById("fLatitude").value = e.lngLat.lat.toFixed(6);
   document.getElementById("fLongitude").value = e.lngLat.lng.toFixed(6);
+  updateDraftMarker(e.lngLat.lat, e.lngLat.lng);
 });
 
 // Applies whatever came in on the URL (see urlParams/urlSite near the top)

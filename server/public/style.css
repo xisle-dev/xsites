@@ -1095,6 +1095,19 @@ html, body {
   transform: translate(-50%, -50%) rotate(45deg);
 }
 
+/* The in-progress pin position while adding/editing a site's location --
+   distinct from the solid .site-marker so it reads as "not saved yet",
+   not a second real site. Same pin shape, inverted colors. */
+.site-marker-draft {
+  background: #fff;
+  border-color: #ff5a3c;
+  cursor: default;
+}
+
+.site-marker-draft::after {
+  background: #ff5a3c;
+}
+
 .site-marker-label {
   font-size: 11px;
   font-weight: 600;
