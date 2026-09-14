@@ -24,7 +24,7 @@ import {
   MediaNotFoundError,
 } from "./store";
 import { handleTileRequest } from "./tiles";
-import { publishAllSites, publishMedia, publishDeleteMedia, publishDeleteSiteMedia } from "./publish";
+import { publishSiteChange, publishSiteRemoval, publishMedia, publishDeleteMedia, publishDeleteSiteMedia } from "./publish";
 import { R2ObjectStore, type ObjectStore } from "./objectstore";
 import { CloudflareAccessAuthenticator, type Authenticator } from "./auth";
 import { getAllowedEmails, isEmailAllowed, addAllowedEmail, removeAllowedEmail, createInvite, listInvites, revokeInvite, acceptInvite } from "./accesslist";
@@ -57,12 +57,12 @@ function errorResponse(status: number, message: string): Response {
 // public viewer) both read this same pre-aggregated snapshot rather than
 // fetching every site individually from LIVE_DATA -- safe for the
 // authenticated list too, not just the public one, because every write
-// handler below awaits publishAllSites before responding, so the mirror is
-// always current by the time a client could plausibly re-fetch the list.
-// Individual site reads/writes (GET/PUT/DELETE /api/sites/<id>) still go
-// straight to LIVE_DATA, unaffected -- only the "fetch all N sites" path
-// benefited from this (measured ~5s doing that individually, vs ~150ms
-// for one object here).
+// handler below awaits publishSiteChange/publishSiteRemoval before
+// responding, so the mirror is always current by the time a client could
+// plausibly re-fetch the list. Individual site reads/writes (GET/PUT/DELETE
+// /api/sites/<id>) still go straight to LIVE_DATA, unaffected -- only the
+// "fetch all N sites" path benefited from this (measured ~5s doing that
+// individually, vs ~150ms for one object here).
 async function readPublishedSites(ctx: Ctx): Promise<Response | null> {
   const obj = await ctx.publicStore.get("sites.json");
   if (!obj) return null;
@@ -118,9 +118,15 @@ async function handleCreateSite(ctx: Ctx, request: Request): Promise<Response> {
     references: [],
   };
   applySiteInput(site, input);
-  await saveSite(ctx.live, site);
-  await publishAllSites(ctx.live, ctx.publicStore);
-  return json(await getSite(ctx.live, id), 201);
+  // The LIVE_DATA save and the PUBLIC_SITE mirror update touch different
+  // buckets and don't depend on each other's result, so they run
+  // concurrently instead of as two sequential round trips. Returning the
+  // in-memory site (rather than re-fetching it) skips a third: saveSite
+  // writes exactly this object, and parseSiteYaml/renderSiteYaml are
+  // lossless inverses of each other, so a re-read would just reconstruct
+  // what's already in hand.
+  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  return json(site, 201);
 }
 
 async function handleUpdateSite(ctx: Ctx, id: string, request: Request): Promise<Response> {
@@ -138,9 +144,10 @@ async function handleUpdateSite(ctx: Ctx, id: string, request: Request): Promise
     return errorResponse(400, "invalid JSON body");
   }
   applySiteInput(site, input);
-  await saveSite(ctx.live, site);
-  await publishAllSites(ctx.live, ctx.publicStore);
-  return json(await getSite(ctx.live, id));
+  // See handleCreateSite: the two writes are independent, and the
+  // in-memory site is already exactly what saveSite persisted.
+  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  return json(site);
 }
 
 async function handleDeleteSite(ctx: Ctx, id: string): Promise<Response> {
@@ -152,7 +159,7 @@ async function handleDeleteSite(ctx: Ctx, id: string): Promise<Response> {
   }
   await deleteSite(ctx.live, id);
   await publishDeleteSiteMedia(ctx.publicStore, id);
-  await publishAllSites(ctx.live, ctx.publicStore);
+  await publishSiteRemoval(ctx.live, ctx.publicStore, id);
   return json({ ok: true });
 }
 
@@ -230,9 +237,10 @@ async function handleUploadMedia(ctx: Ctx, id: string, request: Request): Promis
   if (existingIndex >= 0) site.references[existingIndex] = newRef;
   else site.references.push(newRef);
 
-  await saveSite(ctx.live, site);
-  await publishAllSites(ctx.live, ctx.publicStore);
-  return json(await getSite(ctx.live, id), 201);
+  // See handleCreateSite: the two writes are independent, and the
+  // in-memory site is already exactly what saveSite persisted.
+  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  return json(site, 201);
 }
 
 async function handleUpdateMedia(ctx: Ctx, id: string, filename: string, request: Request): Promise<Response> {
@@ -257,9 +265,10 @@ async function handleUpdateMedia(ctx: Ctx, id: string, filename: string, request
     }
   }
   if (!found) return errorResponse(404, "media not found");
-  await saveSite(ctx.live, site);
-  await publishAllSites(ctx.live, ctx.publicStore);
-  return json(await getSite(ctx.live, id));
+  // See handleCreateSite: the two writes are independent, and the
+  // in-memory site is already exactly what saveSite persisted.
+  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  return json(site);
 }
 
 async function handleDeleteMedia(ctx: Ctx, id: string, filename: string): Promise<Response> {
@@ -280,9 +289,10 @@ async function handleDeleteMedia(ctx: Ctx, id: string, filename: string): Promis
   await publishDeleteMedia(ctx.publicStore, id, filename);
 
   site.references = site.references.filter((ref) => !ref.url.endsWith("/" + filename));
-  await saveSite(ctx.live, site);
-  await publishAllSites(ctx.live, ctx.publicStore);
-  return json(await getSite(ctx.live, id));
+  // See handleCreateSite: the two writes are independent, and the
+  // in-memory site is already exactly what saveSite persisted.
+  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  return json(site);
 }
 
 async function handleGetMedia(ctx: Ctx, id: string, filename: string): Promise<Response> {
