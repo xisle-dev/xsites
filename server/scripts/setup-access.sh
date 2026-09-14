@@ -7,7 +7,7 @@
 # each address passed in. Safe to re-run -- every step checks for an
 # existing resource by name/domain before creating one. See github issues
 # #19 and #20 -- and the "public read-only + gated /admin" split described
-# there, since worker/index.ts serves a public read-only viewer at "/" with
+# there, since server/index.ts serves a public read-only viewer at "/" with
 # the full CRUD editor moved to "/admin", so only "/admin" and "/api" need
 # to sit behind Access.
 #

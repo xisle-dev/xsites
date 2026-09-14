@@ -26,11 +26,19 @@ directory = "./public"
 binding = "LIVE_DATA"
 bucket_name = "xsites-live-data"
 
-# PUBLIC_SITE: the read-only static viewer's bucket (sites.json,
-# media/<id>/<file>, and the static/dist/ assets synced by
-# .github/workflows/deploy-r2.yml). The Worker only ever writes to
-# sites.json/media/* here (the instant-publish mirror, issue #18) -- never
-# touches the static code/asset files that workflow owns.
+# PUBLIC_SITE: the public read-only viewer's bucket (sites.json,
+# media/<id>/<file>, the PMTiles archive). The instant-publish mirror
+# (issue #18) keeps sites.json/media/* current here on every save.
 [[r2_buckets]]
 binding = "PUBLIC_SITE"
 bucket_name = "xsites"
+
+# Cloudflare Access config, read by auth.ts -- not secret (an audience tag
+# and team domain are effectively public identifiers, and the allowlist
+# isn't sensitive for a single-user hobby project), so plain vars rather
+# than secrets. ACCESS_AUD is the "xsites editor" Access application's aud
+# tag (Zero Trust dashboard -> Access -> Applications -> the app -> Overview).
+[vars]
+ACCESS_TEAM_DOMAIN = "xsites.cloudflareaccess.com"
+ACCESS_AUD = "8bcfeafd108027da706e730bbb68c72dea524bf2429750da57eff4908471a905"
+ACCESS_ALLOWED_EMAILS = "gtissington@gmail.com"

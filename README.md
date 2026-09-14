@@ -2,20 +2,22 @@
 
 A MapLibre GL map of Vancouver Island paragliding launch sites: Google satellite
 imagery draped over AWS's global DEM for 3D terrain, vector place/road labels
-from a local Protomaps basemap extract, and a CRUD UI (backed by a Cloudflare
-Worker) for managing the site database.
+from a local Protomaps basemap extract, and a CRUD UI (backed by `server/`)
+for managing the site database.
 
 ## Architecture
 
-A single Cloudflare Worker (`worker/`) serves the whole app:
+A single server (`server/`) serves the whole app, deployed as a Cloudflare
+Worker today (see **Live editing** below) but written to be portable --
+see **Portability** below for exactly what is and isn't Cloudflare-specific:
 
-- `worker/public/` at `/` — a public, unauthenticated read-only viewer,
+- `server/public/` at `/` — a public, unauthenticated read-only viewer,
   reading site data from `GET /sites.json` (a snapshot kept current by the
   instant-publish mirror, see below -- not a live `/api/sites` call) and
-  labels from the Worker's own `/tiles/*` route.
-- `worker/public/admin/` at `/admin` — the full read/write CRUD editor.
+  labels from the server's own `/tiles/*` route.
+- `server/public/admin/` at `/admin` — the full read/write CRUD editor.
 - `/api/sites` (CRUD JSON), `/media/<id>/<file>` (site photos), and
-  `/tiles/*` (vector tiles read straight out of R2) round out the Worker;
+  `/tiles/*` (vector tiles read straight out of R2) round out the server;
   the public viewer only ever hits the latter two.
 
 `/admin` and `/api` are the only paths gated by Cloudflare Access (email
@@ -32,15 +34,15 @@ to R2 by GitHub Actions, with its own preview server in `tools/localserve`).
 All of that -- along with the repo-root `app.js`/`index.html`/`style.css`/
 `logo.svg`/`favicon.svg` copies it left behind, and the `sites/*.yaml`
 snapshot the old Go server used to read directly -- was retired once the
-Worker itself could serve an equivalent (and for the public view, strictly
+server itself could serve an equivalent (and for the public view, strictly
 better -- live rather than periodically rebuilt) experience on its own.
-`worker/public/` is the sole source of truth for every file the app serves;
+`server/public/` is the sole source of truth for every file the app serves;
 see github issue #11 for the Cloud Run migration.
 
 ### Map rendering
 
 - **MapLibre GL JS 6.7.0**, loaded as an ES module straight from jsdelivr —
-  no bundler, no `node_modules` for the map code itself (the Worker's own
+  no bundler, no `node_modules` for the map code itself (the server's own
   build tooling is separate, see **Live editing** below).
 - **Satellite imagery**: Google's 2D satellite raster tiles, fetched
   client-side through a custom `gtiles://` protocol (`addProtocol`) that
@@ -58,7 +60,7 @@ see github issue #11 for the Cloud Run migration.
   (`@protomaps/basemaps`), filtered down to text-only symbol layers (no
   sprite icons, since the sprite sheet isn't loaded) so place/road names stay
   upright at any bearing, unlike Google's raster labels. Served straight out
-  of the `.pmtiles` archive in R2 by the Worker (`worker/src/tiles.ts`),
+  of the `.pmtiles` archive in R2 by the server (`server/src/tiles.ts`),
   using the `pmtiles` npm package's documented Workers+R2 pattern -- byte-range
   reads directly against the archive object, no separate tile server. Both
   `/` and `/admin` read this same route.
@@ -67,7 +69,7 @@ see github issue #11 for the Cloud Run migration.
   OpenAIP (CC BY-NC 4.0, ultimately sourced from NAV CANADA's Designated
   Airspace Handbook), pre-filtered to the Vancouver Island flying area by
   `etl airspace` (see **Regenerating the ETL outputs** below) and served
-  from `worker/public/data/airspace.geojson`. Off by default (most visits
+  from `server/public/data/airspace.geojson`. Off by default (most visits
   never need it), and this file itself isn't even fetched until the "Show
   airspace" checkbox is first ticked — its GeoJSON source starts out empty
   and is populated on demand.
@@ -119,16 +121,16 @@ Each launch site is one record covering name, area, description/hazards
 (rich text), lat/lon, elevation, a saved camera preset for "Fly here", and a
 list of reference links (photos, PDFs, GPX tracks).
 
-The sole source of truth is a Cloudflare R2 bucket (`worker/src/store.ts`),
+The sole source of truth is a Cloudflare R2 bucket (`server/src/store.ts`),
 one object per site at `sites/<id>.yaml` plus media at
 `sites/<id>/media/<filename>`, using a small hand-rolled flat-scalar YAML
-dialect (see `worker/src/siteyaml.ts`'s header comment). All reads and
-writes from the Worker editor go here, via a native R2 binding -- there's no
+dialect (see `server/src/siteyaml.ts`'s header comment). All reads and
+writes from the editor go here, via a native R2 binding -- there's no
 local disk, no repo-checked-in copy, and no S3-style credentials involved.
 
 ## Running it
 
-Run the Worker locally with Wrangler, against real R2 buckets (no
+Run the server locally with Wrangler, against real R2 buckets (no
 local-disk mode):
 
 ```bash
@@ -143,7 +145,7 @@ account (see below).
 
 ## Live editing (Cloudflare Workers)
 
-The dynamic app runs as a Cloudflare Worker (`worker/`). `/` is public and
+The dynamic app runs as a server (`server/`), deployed as a Cloudflare Worker. `/` is public and
 read-only; `/admin` (the full CRUD editor) and `/api` are gated by
 Cloudflare Access (email one-time-PIN) so only allowlisted addresses can
 reach them. Compute, storage, DNS, and auth are all Cloudflare-native -- see
@@ -156,7 +158,7 @@ personal Google account).
 1. **Two R2 buckets**: `xsites-live-data` (the editor's live source of
    truth) and `xsites` (the public bucket, used for the instant-publish
    mirror and the PMTiles archive). Both are declared as native bindings in
-   `worker/wrangler.toml` -- no separate credentials needed for the Worker
+   `server/wrangler.toml` -- no separate credentials needed for the server
    to read/write them.
 2. **Upload the `.pmtiles` label archive** to the `xsites` bucket once (it's
    too large for git and rarely changes):
@@ -167,7 +169,7 @@ personal Google account).
    ```
    (`--remote` matters -- without it, `wrangler r2 object put` writes to
    Miniflare's local simulated storage instead of the real bucket.)
-3. **Deploy the Worker**:
+3. **Deploy the server**:
    ```bash
    cd worker
    npm install
@@ -182,7 +184,7 @@ personal Google account).
 5. **Provision Cloudflare Access** with the idempotent setup script:
    ```bash
    CF_ACCOUNT_ID=<account-id> CF_ACCESS_TOKEN=<token> \
-     worker/scripts/setup-access.sh sites.xisle.net you@example.com [more emails...]
+     server/scripts/setup-access.sh sites.xisle.net you@example.com [more emails...]
    ```
    The token needs "Access: Apps and Policies: Edit" and "Access:
    Organizations, Identity Providers, and Groups: Edit" (My Profile → API
@@ -202,19 +204,54 @@ cd worker
 npx wrangler deploy
 ```
 
-Wrangler re-uploads changed static assets (`worker/public/`) and the Worker
+Wrangler re-uploads changed static assets (`server/public/`) and the server
 script together; no image build, no container registry.
 
 ### Instant publish
 
-`worker/src/publish.ts` mirrors every save into the `xsites` bucket's
-`sites.json` / `media/<id>/<file>`, which is what the Worker's own public
+`server/src/publish.ts` mirrors every save into the `xsites` bucket's
+`sites.json` / `media/<id>/<file>`, which is what the server's own public
 viewer (`GET /sites.json`, `GET /media/...`) actually reads -- kept separate
 from the live-editing bucket (`xsites-live-data`) so an anonymous page view
 never touches the authoritative per-site YAML store or pays for re-parsing
 it. Because `PUBLIC_SITE` is just another R2 binding (not a separate set of
 credentials the way the old Cloud Run setup needed), this always runs --
 there's no "not configured yet" state to worry about.
+
+## Portability
+
+`server/`'s request-handling code (`index.ts`'s routing, `siteyaml.ts`'s
+parsing, the `pmtiles` tile-serving logic) is written against plain
+`Request`/`Response`/`URL` -- the same shape Deno Deploy and Bun support
+natively, and Node 18+ can via a thin adapter. Two things are genuinely
+platform-specific, and both sit behind an interface for exactly that
+reason:
+
+- **Storage** (`objectstore.ts`): `store.ts`, `publish.ts`, and `tiles.ts`
+  all depend on the `ObjectStore` interface (get/getRange/put/delete/list/
+  exists on string keys and ArrayBuffers), not on R2 directly. `R2ObjectStore`
+  is the only implementation today; adding an S3-compatible or
+  local-filesystem one is contained entirely to a new class satisfying
+  that interface -- nothing else changes.
+- **Auth** (`auth.ts`): `index.ts` calls an `Authenticator` for every
+  `/admin` and `/api` request and checks the result against an email
+  allowlist itself, rather than trusting that *something* already gated
+  the request. `CloudflareAccessAuthenticator` verifies Cloudflare Access's
+  signed JWT against the team's published keys (real signature
+  verification via Web Crypto, not just "a header is present") -- it's the
+  only implementation today, but the interface is small (one method:
+  given a `Request`, return an email or `null`), so a session/cookie-based
+  authenticator for a self-hosted deployment is a contained addition, not
+  a rewrite. Cloudflare Access *also* still blocks unauthenticated
+  requests to `/admin*`/`/api*` at the edge (see **Live editing** below) --
+  belt and suspenders on Cloudflare, but the app-level check is what would
+  actually enforce the policy running anywhere else.
+
+What's *not* abstracted, because there's nothing generic to abstract it
+into: Workers Assets (static file serving) and `wrangler.toml`'s deploy
+config (custom domain, routes) are Cloudflare-specific by nature -- another
+platform needs its own static-file story and its own deploy mechanism
+regardless of how the request-handling code is structured.
 
 ## Regenerating the ETL outputs
 
@@ -236,7 +273,7 @@ go build -o etl.exe .   # or just `go run .`
 **Airspace** (`./etl.exe airspace`): downloads OpenAIP's Canada-wide export,
 caches it at `etl/data-sources/openaip-ca-airspace.geojson`, trims it to the
 Vancouver Island flying area, and writes `etl/output/airspace.geojson`.
-Copy that into `worker/public/data/airspace.geojson` and redeploy (see
+Copy that into `server/public/data/airspace.geojson` and redeploy (see
 **Notes** below for why it's not read directly from `etl/output/`).
 
 **Tiles** (`./etl.exe tiles [YYYYMMDD]`): extracts the Vancouver Island bbox
@@ -250,14 +287,14 @@ After regenerating, re-upload it (see **Live editing** step 2).
 
 ## Notes
 
-- `worker/public/app.js` and `worker/public/admin/app.js` each embed a
+- `server/public/app.js` and `server/public/admin/app.js` each embed a
   Google Maps Platform API key for satellite tiles, from a dedicated GCP
   project (`xisle-maps`) with the Map Tiles API and Places API (New)
   enabled and billing linked. Swap it for your own if it's ever
   rotated/revoked -- test with a direct `POST` to
   `tile.googleapis.com/v1/createSession`, which returns a clear
   `API_KEY_INVALID` if not.
-- The site YAML dialect (see `worker/src/siteyaml.ts`'s header comment) is a
+- The site YAML dialect (see `server/src/siteyaml.ts`'s header comment) is a
   small hand-rolled flat-scalar format, not general YAML -- it round-trips
   exactly what R2 already holds, but wasn't built to handle arbitrary YAML.
 - Both `index.html` files load their `app.js`/`style.css` with a
@@ -267,8 +304,8 @@ After regenerating, re-upload it (see **Live editing** step 2).
   reliably fix it. Bump the relevant `?v=` value(s) (e.g. to the current
   unix time) whenever `app.js` or `style.css` changes, or a deploy can
   silently keep serving stale JS to already-open tabs.
-- `worker/public/data/airspace.geojson` is its own tracked copy, not read
+- `server/public/data/airspace.geojson` is its own tracked copy, not read
   directly from `etl/output/` -- Workers Assets deploys whatever's
-  physically in `worker/public/` at `wrangler deploy` time, and the Worker
+  physically in `server/public/` at `wrangler deploy` time, and the server
   has no access to a developer's local `etl/output/` at runtime. Copy the
   file over after every `etl airspace` regen, same as `app.js`/`style.css`.
