@@ -550,10 +550,10 @@ exaggerationInput.addEventListener("input", (e) => {
   applyTerrain();
 });
 
-// Map Controls (pitch/exaggeration/airspace legend) lives in a dropdown off
-// the hamburger button in the header, not inline in the panel/sheet -- closes
-// on a second click of the button or a click anywhere outside it.
-const mapControlsMenu = document.getElementById("mapControlsMenu");
+// Map Controls (pitch/exaggeration/airspace legend) opens inline between
+// the header and the search box -- not a floating dropdown -- pushing the
+// search box and site list down while it's open. Closes on a second click
+// of the button or a click anywhere outside the button/panel.
 const mapControlsToggle = document.getElementById("mapControlsToggle");
 const terrainContent = document.getElementById("terrainContent");
 mapControlsToggle.addEventListener("click", (e) => {
@@ -563,7 +563,7 @@ mapControlsToggle.addEventListener("click", (e) => {
   terrainContent.hidden = expanded;
 });
 document.addEventListener("click", (e) => {
-  if (!terrainContent.hidden && !mapControlsMenu.contains(e.target)) {
+  if (!terrainContent.hidden && e.target !== mapControlsToggle && !terrainContent.contains(e.target)) {
     mapControlsToggle.setAttribute("aria-expanded", "false");
     terrainContent.hidden = true;
   }

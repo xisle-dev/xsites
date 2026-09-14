@@ -9,7 +9,7 @@
   <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
        (e.g. to the current unix time) whenever either file changes, since a
        plain reload isn't reliably enough to pick up a new version. -->
-  <link rel="stylesheet" href="style.css?v=1789409980" />
+  <link rel="stylesheet" href="style.css?v=1789410248" />
 </head>
 <body>
   <div id="map"></div>
@@ -28,47 +28,47 @@
             <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
             <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
           </div>
-          <div id="mapControlsMenu" class="map-controls-menu">
-            <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
-            <div id="terrainContent" class="terrain-content" hidden>
-            <a href="/admin/" id="signInBtn" class="sign-in-btn">Sign in</a>
-
-            <div class="list-filters">
-              <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
-              <select id="areaFilter">
-                <option value="">All areas</option>
-              </select>
-            </div>
-
-            <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
-            <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
-
-            <label for="exaggeration">Terrain exaggeration: <span id="exaggerationValue">1.5</span>&times;</label>
-            <input type="range" id="exaggeration" min="0.5" max="4" step="0.1" value="1.5" />
-
-            <div class="airspace-controls">
-              <label class="airspace-toggle-row">
-                <input type="checkbox" id="airspaceToggle" />
-                <span>Show airspace</span>
-              </label>
-              <div id="airspaceLegend" class="airspace-legend">
-                <label><input type="checkbox" data-airspace-class="B" /> <span class="swatch" style="background:#3b82f6"></span> Class B</label>
-                <label><input type="checkbox" data-airspace-class="C" checked /> <span class="swatch" style="background:#ec4899"></span> Class C</label>
-                <label><input type="checkbox" data-airspace-class="D" checked /> <span class="swatch" style="background:#22d3ee"></span> Class D</label>
-                <label><input type="checkbox" data-airspace-class="E" checked /> <span class="swatch" style="background:#a78bfa"></span> Class E</label>
-                <label><input type="checkbox" data-airspace-class="F" checked /> <span class="swatch" style="background:#f97316"></span> Class F (advisory)</label>
-                <label><input type="checkbox" data-airspace-class="SUA" checked /> <span class="swatch" style="background:#ef4444"></span> Restricted / danger</label>
-              </div>
-              <div class="airspace-attribution">
-                Airspace data &copy; <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors, CC BY-NC 4.0. Not for navigation.
-              </div>
-            </div>
-
-            <div id="glideLegend" class="glide-legend" hidden></div>
-          </div>
+          <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
         </div>
       </div>
+
+      <div id="terrainContent" class="terrain-content" hidden>
+        <a href="/admin/" id="signInBtn" class="sign-in-btn">Sign in</a>
+
+        <div class="list-filters">
+          <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
+          <select id="areaFilter">
+            <option value="">All areas</option>
+          </select>
+        </div>
+
+        <label for="pitch">Pitch: <span id="pitchValue">0</span>&deg;</label>
+        <input type="range" id="pitch" min="0" max="80" step="1" value="0" />
+
+        <label for="exaggeration">Terrain exaggeration: <span id="exaggerationValue">1.5</span>&times;</label>
+        <input type="range" id="exaggeration" min="0.5" max="4" step="0.1" value="1.5" />
+
+        <div class="airspace-controls">
+          <label class="airspace-toggle-row">
+            <input type="checkbox" id="airspaceToggle" />
+            <span>Show airspace</span>
+          </label>
+          <div id="airspaceLegend" class="airspace-legend">
+            <label><input type="checkbox" data-airspace-class="B" /> <span class="swatch" style="background:#3b82f6"></span> Class B</label>
+            <label><input type="checkbox" data-airspace-class="C" checked /> <span class="swatch" style="background:#ec4899"></span> Class C</label>
+            <label><input type="checkbox" data-airspace-class="D" checked /> <span class="swatch" style="background:#22d3ee"></span> Class D</label>
+            <label><input type="checkbox" data-airspace-class="E" checked /> <span class="swatch" style="background:#a78bfa"></span> Class E</label>
+            <label><input type="checkbox" data-airspace-class="F" checked /> <span class="swatch" style="background:#f97316"></span> Class F (advisory)</label>
+            <label><input type="checkbox" data-airspace-class="SUA" checked /> <span class="swatch" style="background:#ef4444"></span> Restricted / danger</label>
+          </div>
+          <div class="airspace-attribution">
+            Airspace data &copy; <a href="https://www.openaip.net" target="_blank" rel="noopener">OpenAIP</a> contributors, CC BY-NC 4.0. Not for navigation.
+          </div>
+        </div>
+
+        <div id="glideLegend" class="glide-legend" hidden></div>
       </div>
+
       <div class="topbar-search">
         <input type="text" id="placeSearch" placeholder="Search places..." autocomplete="off" />
         <div id="placeSuggestions" class="place-suggestions" hidden></div>
@@ -101,6 +101,6 @@
 
   <div id="glideHoverTip" class="glide-hover-tip" hidden></div>
 
-  <script type="module" src="app.js?v=1789409980"></script>
+  <script type="module" src="app.js?v=1789410248"></script>
 </body>
 </html>
