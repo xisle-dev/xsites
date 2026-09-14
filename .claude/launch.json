@@ -3,15 +3,9 @@
   "configurations": [
     {
       "name": "xsite",
-      "runtimeExecutable": "server\\xsite-server.exe",
-      "runtimeArgs": ["-port=8933", "-root=."],
-      "port": 8933
-    },
-    {
-      "name": "xsite-static",
-      "runtimeExecutable": "tools\\localserve\\localserve.exe",
-      "runtimeArgs": ["-dir=dist", "-port=8934"],
-      "port": 8934
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--remote", "--config", "server/wrangler.toml"],
+      "port": 8787
     }
   ]
 }
