@@ -801,6 +801,18 @@ function haversineDistance(lng1, lat1, lng2, lat2) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
+// Great-circle initial bearing from (lng1,lat1) to (lng2,lat2), in degrees.
+// The inverse of destinationPoint above -- used so requiredGlideRatio (the
+// hover readout) walks the exact same kind of straight great-circle path
+// computeGlideRange's rays do, rather than a cheaper straight line in
+// lng/lat space that isn't quite the same path on a sphere.
+function initialBearing(lng1, lat1, lng2, lat2) {
+  const toRad = Math.PI / 180;
+  const φ1 = lat1 * toRad, φ2 = lat2 * toRad, Δλ = (lng2 - lng1) * toRad;
+  const θ = Math.atan2(Math.sin(Δλ) * Math.cos(φ2), Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ));
+  return ((θ * 180) / Math.PI + 360) % 360;
+}
+
 function ringSignedArea(coords) {
   let sum = 0;
   for (let i = 0; i < coords.length - 1; i++) {
@@ -817,9 +829,25 @@ function orientRing(coords, ccw) {
 }
 
 const GLIDE_RATIOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // steepest (smallest reach) first
-const GLIDE_RAY_COUNT = 72; // every 5°
-const GLIDE_STEP_M = 100; // coarse scan step -- see GLIDE_REFINE_ITERS for the actual boundary precision
-const GLIDE_REFINE_ITERS = 6; // bisection steps once a ray's coarse scan finds the bracket it grounds out in -- ~1.6m precision at a 100m step
+// Each rendered band edge is a straight chord between adjacent rays, not
+// the true (curved, terrain-dependent) boundary -- at GLIDE_MAX_RADIUS_M
+// that chord spans ~2.2km at 5° spacing, wide enough for the polygon to
+// visibly disagree with a precise per-bearing calculation (like
+// requiredGlideRatio's hover readout) near a sharp ridge or valley. 144
+// rays (2.5°) roughly halves that gap; the ray sweep is still a one-time
+// cost per click; not per frame, so doubling it is cheap for the accuracy.
+const GLIDE_RAY_COUNT = 144;
+// Coarse scan step along each ray -- see GLIDE_REFINE_ITERS for the actual
+// boundary precision once a crossing is found. A real obstruction can still
+// hide entirely *before* the first sample: the coarse march treats distance
+// 0 as clear without checking it, so a dip that rises above the glide line
+// and drops back below it again before the first sample point is invisible
+// to the algorithm (it only bisects between two coarse samples that
+// disagree -- it never re-examines a bracket that already agrees). Halved
+// from 100m to keep that blind spot closer to DEM-pixel scale (~25-30m,
+// see ELEV_TILE_ZOOM) instead of several pixels wide.
+const GLIDE_STEP_M = 50;
+const GLIDE_REFINE_ITERS = 6; // bisection steps once a ray's coarse scan finds the bracket it grounds out in -- ~0.8m precision at a 50m step
 const GLIDE_MIN_RADIUS_M = 3000;
 const GLIDE_MAX_RADIUS_M = 25000;
 
@@ -839,11 +867,23 @@ let glideOrigin = null; // { lng, lat, elev } for the currently shown fan, or nu
 // order to reach (lng,lat) in a straight line without ever dipping under
 // intervening terrain -- i.e. exactly the shallowest band that point would
 // fall inside, but computed continuously for wherever the cursor actually
-// is instead of snapping to one of the 10 rendered bands. Returns null if
-// there's no fan yet, the point is too close to the origin to say anything
-// meaningful, or terrain data isn't cached that far out; Infinity if terrain
-// clearly above launch height blocks the path outright.
-const GLIDE_HOVER_SAMPLES = 40;
+// is instead of snapping to one of the GLIDE_RAY_COUNT bearings the fan
+// itself samples (see computeGlideRange). Walks the same kind of path
+// computeGlideRange's rays do -- initialBearing + destinationPoint
+// great-circle stepping, at a fixed distance step rather than a fixed
+// sample COUNT -- specifically so hovering near a band's edge agrees with
+// which band it visually looks like you're standing in. The two used to
+// disagree there: this function previously interpolated lng/lat linearly
+// (a different, if very similar, path on a sphere than the fan's true
+// great-circle rays) and sampled a flat 40 points across whatever the
+// total distance was, so a 20km hover only checked terrain every ~500m --
+// far coarser than the fan's own march, wide enough to step clean over a
+// ridge the fan's finer sampling (plus its bisection refine -- see
+// GLIDE_REFINE_ITERS) would have caught. Returns null if there's no fan
+// yet, the point is too close to the origin to say anything meaningful, or
+// terrain data isn't cached that far out; Infinity if terrain clearly
+// above launch height blocks the path outright.
+const GLIDE_HOVER_STEP_M = 50;
 // The DEM is ~25-30m/px (see ELEV_TILE_ZOOM) and sampled nearest-pixel, so a
 // hover point within a pixel or two of the origin often lands on the exact
 // same pixel as the origin's own elevation sample -- a height difference of
@@ -853,20 +893,36 @@ const GLIDE_HOVER_SAMPLES = 40;
 // next to a *farther* one that reads as perfectly reachable.
 const GLIDE_HOVER_MIN_DIST_M = 30;
 const GLIDE_ELEV_NOISE_M = 5;
+// Shared by the fan (computeGlideRange) and the hover readout
+// (requiredGlideRatio) so the two agree on the exact same notion of
+// "grounded", noise floor included. Without the floor here, a headroom of
+// a few centimeters right next to the pin (routine DEM quantization -- see
+// GLIDE_ELEV_NOISE_M above) reads as "blocked" for literally every ratio
+// at the very first sample, since near d=0 the glide line and originElev
+// are nearly the same value and any noise tips elev over it -- collapsing
+// the whole fan to a tiny ring around the pin regardless of real terrain
+// farther out. Flooring headroom at GLIDE_ELEV_NOISE_M before comparing to
+// d/r treats that noise the same way requiredGlideRatio already does.
+function isGlideGrounded(originElev, elev, d, r) {
+  const headroom = originElev - elev;
+  if (headroom <= -GLIDE_ELEV_NOISE_M) return true; // genuinely higher terrain -- no finite ratio clears it
+  return d > r * Math.max(headroom, GLIDE_ELEV_NOISE_M);
+}
 function requiredGlideRatio(lng, lat) {
   if (!glideOrigin) return null;
   const dist = haversineDistance(glideOrigin.lng, glideOrigin.lat, lng, lat);
   if (dist < GLIDE_HOVER_MIN_DIST_M) return null;
+  const bearing = initialBearing(glideOrigin.lng, glideOrigin.lat, lng, lat);
   let maxRatio = 0;
-  for (let i = 1; i <= GLIDE_HOVER_SAMPLES; i++) {
-    const t = i / GLIDE_HOVER_SAMPLES;
-    const plng = glideOrigin.lng + (lng - glideOrigin.lng) * t;
-    const plat = glideOrigin.lat + (lat - glideOrigin.lat) * t;
+  const steps = Math.ceil(dist / GLIDE_HOVER_STEP_M);
+  for (let i = 1; i <= steps; i++) {
+    const d = Math.min(dist, i * GLIDE_HOVER_STEP_M); // last step lands exactly on the cursor, not past it
+    const [plng, plat] = destinationPoint(glideOrigin.lng, glideOrigin.lat, bearing, d);
     const elev = sampleElevation(plng, plat);
     if (elev == null) return null;
     const headroom = glideOrigin.elev - elev;
     if (headroom <= -GLIDE_ELEV_NOISE_M) return Infinity; // genuinely higher terrain -- no finite ratio clears it
-    maxRatio = Math.max(maxRatio, (dist * t) / Math.max(headroom, GLIDE_ELEV_NOISE_M));
+    maxRatio = Math.max(maxRatio, d / Math.max(headroom, GLIDE_ELEV_NOISE_M));
   }
   return maxRatio;
 }
@@ -954,7 +1010,7 @@ async function computeGlideRange(lng, lat) {
           break;
         }
         for (const r of [...unresolved]) {
-          if (elev >= originElev - d / r) {
+          if (isGlideGrounded(originElev, elev, d, r)) {
             // Ground was hit somewhere between lastSafeD (still clear) and d
             // (already grounded) -- bisect that bracket instead of just
             // reporting d, which would otherwise round every ratio up to the
@@ -970,7 +1026,7 @@ async function computeGlideRange(lng, lat) {
               const mid = (lo + hi) / 2;
               const [mlng, mlat] = destinationPoint(lng, lat, bearing, mid);
               const mElev = sampleElevation(mlng, mlat);
-              if (mElev == null || mElev >= originElev - mid / r) hi = mid;
+              if (mElev == null || isGlideGrounded(originElev, mElev, mid, r)) hi = mid;
               else lo = mid;
             }
             boundary[r][i] = hi;
