@@ -1377,6 +1377,16 @@ const siteSearch = document.getElementById("siteSearch");
 const areaFilter = document.getElementById("areaFilter");
 const siteDetailContent = document.getElementById("siteDetailContent");
 
+// The public viewer is read-only -- it has no session and no write access
+// to the API -- so "+ Add" and "Edit" don't open a form here. They send
+// the browser to /admin/ instead, which sits behind Cloudflare Access: an
+// already-signed-in editor lands straight on the form (?site= deep-links
+// to the right one), while anyone else gets Access's own sign-in prompt
+// first and is bounced back to the same destination afterward.
+document.getElementById("addSiteBtn").addEventListener("click", () => {
+  window.location.href = "/admin/";
+});
+
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -1591,10 +1601,14 @@ function showDetail(id) {
 
     <div class="buttons">
       <button id="flyHereBtn">Fly here</button>
+      <button id="editSiteBtn">Edit</button>
     </div>
   `;
 
   document.getElementById("flyHereBtn").addEventListener("click", () => flyToSite(site));
+  document.getElementById("editSiteBtn").addEventListener("click", () => {
+    window.location.href = `/admin/?site=${encodeURIComponent(site.id)}`;
+  });
 
   flyToSite(site);
   updateUrl();

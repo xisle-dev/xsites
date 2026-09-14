@@ -143,6 +143,24 @@ html, body {
   background: #383e47;
 }
 
+.terrain-content .sign-in-btn {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border: none;
+  border-bottom: 1px solid #2a2e35;
+  border-radius: 0;
+  background: none;
+}
+
+.terrain-content .sign-in-btn:hover {
+  background: none;
+  text-decoration: underline;
+}
+
 /* Dropdown, anchored to the hamburger button rather than inline in the
    panel/sheet -- keeps Map Controls out of the way of the site/airspace
    list, which is most of what's actually in the sheet now. */

@@ -9,7 +9,7 @@
   <!-- ?v= busts browser caching of app.js/style.css across edits -- bump it
        (e.g. to the current unix time) whenever either file changes, since a
        plain reload isn't reliably enough to pick up a new version. -->
-  <link rel="stylesheet" href="style.css?v=1789409643" />
+  <link rel="stylesheet" href="style.css?v=1789409980" />
 </head>
 <body>
   <div id="map"></div>
@@ -24,7 +24,6 @@
           <h1>X/Sites</h1>
         </div>
         <div class="panel-topbar-actions">
-          <a href="/admin/" id="signInBtn" class="sign-in-btn">Sign in</a>
           <div class="zoom-controls">
             <button type="button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
             <button type="button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">&minus;</button>
@@ -32,6 +31,8 @@
           <div id="mapControlsMenu" class="map-controls-menu">
             <button type="button" id="mapControlsToggle" class="hamburger-btn" aria-expanded="false" aria-label="Map controls">&#9776;</button>
             <div id="terrainContent" class="terrain-content" hidden>
+            <a href="/admin/" id="signInBtn" class="sign-in-btn">Sign in</a>
+
             <div class="list-filters">
               <input type="text" id="siteSearch" placeholder="Filter sites or areas..." />
               <select id="areaFilter">
@@ -77,6 +78,7 @@
     <div id="sitesListView">
       <div class="sites-header">
         <h2>Sites</h2>
+        <button id="addSiteBtn" title="Add a new site">+ Add</button>
       </div>
       <div id="siteList"></div>
     </div>
@@ -99,6 +101,6 @@
 
   <div id="glideHoverTip" class="glide-hover-tip" hidden></div>
 
-  <script type="module" src="app.js?v=1789409584"></script>
+  <script type="module" src="app.js?v=1789409980"></script>
 </body>
 </html>
