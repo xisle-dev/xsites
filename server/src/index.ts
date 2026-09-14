@@ -54,23 +54,35 @@ function errorResponse(status: number, message: string): Response {
   return json({ error: message }, status);
 }
 
+// GET /api/sites and GET /sites.json (the latter unauthenticated, for the
+// public viewer) both read this same pre-aggregated snapshot rather than
+// fetching every site individually from LIVE_DATA -- safe for the
+// authenticated list too, not just the public one, because every write
+// handler below awaits publishAllSites before responding, so the mirror is
+// always current by the time a client could plausibly re-fetch the list.
+// Individual site reads/writes (GET/PUT/DELETE /api/sites/<id>) still go
+// straight to LIVE_DATA, unaffected -- only the "fetch all N sites" path
+// benefited from this (measured ~5s doing that individually, vs ~150ms
+// for one object here).
+async function readPublishedSites(ctx: Ctx): Promise<Response | null> {
+  const obj = await ctx.publicStore.get("sites.json");
+  if (!obj) return null;
+  return new Response(obj.data, { headers: { "Content-Type": "application/json; charset=utf-8" } });
+}
+
 async function handleListSites(ctx: Ctx): Promise<Response> {
+  const cached = await readPublishedSites(ctx);
+  if (cached) return cached;
+  // Falls back to a live aggregate only if the mirror doesn't exist yet
+  // (e.g. a fresh deployment before the first save) -- normal operation
+  // never reaches this branch.
   const sites = await getAllSites(ctx.live);
   sites.sort((a, b) => a.id.localeCompare(b.id));
   return json(sites);
 }
 
-// Public, unauthenticated read of the same sites.json the instant-publish
-// mirror (publishAllSites, see publish.ts) keeps current in the public
-// store on every save -- what the public read-only viewer
-// (server/public/app.js) fetches instead of the Access-gated /api/sites.
-// Not just an alias for handleListSites: reading the already-published
-// snapshot avoids touching LIVE_DATA (and its per-site YAML parse) on
-// every anonymous page load.
 async function handleSitesJson(ctx: Ctx): Promise<Response> {
-  const obj = await ctx.publicStore.get("sites.json");
-  if (!obj) return json([]);
-  return new Response(obj.data, { headers: { "Content-Type": "application/json; charset=utf-8" } });
+  return (await readPublishedSites(ctx)) ?? json([]);
 }
 
 async function handleGetSite(ctx: Ctx, id: string): Promise<Response> {

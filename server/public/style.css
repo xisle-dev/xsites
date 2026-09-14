@@ -17,6 +17,44 @@ html, body {
   inset: 0;
 }
 
+/* Covers the map while the initial site data fetch and first map "load"
+   are in flight -- both usually fast (see README's Portability/perf notes)
+   but never instant, and an empty map + empty sidebar for even a few
+   hundred ms reads as "is this broken?" without something visibly
+   working. Faded out (not removed) so a slow "load" (e.g. a flaky
+   satellite tile session) doesn't leave the UI stuck hidden -- see the
+   safety-net timeout in app.js. */
+#loadingOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #14161a;
+  transition: opacity 250ms ease;
+}
+
+#loadingOverlay.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #383e47;
+  border-top-color: #ff5a3c;
+  border-radius: 50%;
+  animation: spinner-rotate 800ms linear infinite;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .zoom-controls {
   display: flex;
   flex-direction: row;

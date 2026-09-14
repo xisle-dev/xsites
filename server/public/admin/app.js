@@ -484,6 +484,19 @@ const map = new Map({
 
 window.map = map;
 
+// Fades out the loading spinner (see index.html/style.css) once the map's
+// initial style/sources are ready -- not tied to every tile actually
+// having painted, just "the app is now interactive". The timeout is a
+// safety net, not the expected path: if "load" never fires (e.g. a
+// rejected/expired Google tile session), the UI shouldn't stay hidden
+// behind a spinner forever.
+const loadingOverlay = document.getElementById("loadingOverlay");
+function hideLoadingOverlay() {
+  loadingOverlay.classList.add("is-hidden");
+}
+map.on("load", hideLoadingOverlay);
+setTimeout(hideLoadingOverlay, 8000);
+
 // Keeps the URL's camera params current whenever the user pans/zooms/tilts
 // freely (updateUrl itself skips this in favor of ?site= while a site is
 // open -- see selectedSiteId).
