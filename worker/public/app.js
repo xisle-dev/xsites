@@ -1526,21 +1526,32 @@ document.getElementById("backToListBtn").addEventListener("click", showListView)
 // Applies whatever came in on the URL (see urlParams/urlSite near the top)
 // on top of the normal initial render: search text and area filter need to
 // land before the first renderMarkers/renderSiteList so they're not shown
-// only to immediately re-render a moment later, while the site and airspace
-// state are applied after since they act on top of that already-filtered
-// list. The camera itself was already handled before the map was even
-// constructed (see START), so there's nothing to do for it here.
+// only to immediately re-render a moment later. The camera itself was
+// already handled before the map was even constructed (see START), so
+// there's nothing to do for it here.
+//
+// Deliberately NOT gated on the map's "load" event: renderMarkers/
+// renderSiteList are plain DOM + MapLibre Marker calls that work on a
+// freshly-constructed Map regardless of whether its style/tiles have
+// finished loading, and gating the site list on "load" meant a slow or
+// failed basemap (e.g. a rejected/rate-limited satellite tile session)
+// left the sidebar empty even though the site data itself had already
+// loaded fine.
 function applyInitialUrlState() {
   populateAreaFilter();
   if (urlParams.has("q")) siteSearch.value = urlParams.get("q");
   if (urlParams.has("area")) areaFilter.value = urlParams.get("area");
   renderMarkers();
   renderSiteList();
+}
+applyInitialUrlState();
 
+// These two genuinely need the style's layers/sources to exist, so they
+// stay gated on "load".
+map.on("load", () => {
   if (urlParams.get("airspace") === "1") {
     airspaceToggle.checked = true;
     applyAirspaceVisibility();
   }
   if (urlSite) showDetail(urlSite.id);
-}
-map.on("load", applyInitialUrlState);
+});
