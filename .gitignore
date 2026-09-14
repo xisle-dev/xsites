@@ -1,14 +1,10 @@
-# Build artifacts -- rebuild with e.g. cd tools/buildstatic && go build .
+# Build artifacts -- rebuild with e.g. cd tools/fetchairspace && go build .
 tools/*/*.exe
 
 # Regenerable Protomaps basemap extract (~200MB, over GitHub's file size
 # limit anyway). Regenerate with go-pmtiles extract -- see README.md.
 tiles/*.pmtiles
 tiles/*.log
-
-# Static site build output (tools/buildstatic) -- generated, deployed to R2
-# by CI, not committed.
-dist/
 
 # Wrangler's local cache (account info, OAuth state) from running it in this
 # directory -- machine-local, not project state.
