@@ -18,13 +18,14 @@ html, body {
 }
 
 /* A translucent scrim over the map while the initial site data fetch and
-   first map "load" are in flight -- both usually fast (see README's
-   Portability/perf notes) but never instant. Deliberately see-through
-   rather than an opaque cover: the map/sidebar/markers should be visible
-   filling in underneath as they become ready, with the spinner just
-   signaling "still settling", not hiding that progress. Faded out (not
-   removed) so a slow "load" (e.g. a flaky satellite tile session) doesn't
-   leave the UI stuck behind it -- see the safety-net timeout in app.js. */
+   first map "load" are in flight. Hidden by default -- app.js only adds
+   is-visible if loading is still going after 500ms, so a fast load (the
+   common case; see README's Portability/perf notes) never shows this at
+   all, and it's not fighting a fade-in/fade-out flash on every page view.
+   Deliberately see-through rather than an opaque cover: the map/sidebar/
+   markers should be visible filling in underneath as they become ready,
+   with the spinner just signaling "still settling", not hiding that
+   progress. */
 #loadingOverlay {
   position: absolute;
   inset: 0;
@@ -33,12 +34,14 @@ html, body {
   align-items: center;
   justify-content: center;
   background: rgba(20, 22, 26, 0.35);
-  transition: opacity 250ms ease;
-}
-
-#loadingOverlay.is-hidden {
   opacity: 0;
   pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+#loadingOverlay.is-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .spinner {
