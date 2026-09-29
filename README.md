@@ -11,23 +11,24 @@ A single server (`server/`) serves the whole app, deployed as a Cloudflare
 Worker today (see **Live editing** below) but written to be portable --
 see **Portability** below for exactly what is and isn't Cloudflare-specific:
 
-- `server/public/` at `/` — a public, unauthenticated read-only viewer,
-  reading site data from `GET /sites.json` (a snapshot kept current by the
-  instant-publish mirror, see below -- not a live `/api/sites` call) and
-  labels from the server's own `/tiles/*` route.
+- `server/public/` at `/` — a public read-only viewer, reading site data
+  from `GET /sites.json` (a snapshot kept current by the instant-publish
+  mirror, see below -- not a live `/api/sites` call) and labels from the
+  server's own `/tiles/*` route.
 - `server/public/admin/` at `/admin` — the full read/write CRUD editor.
 - `/api/sites` (CRUD JSON), `/media/<id>/<file>` (site photos), and
   `/tiles/*` (vector tiles read straight out of R2) round out the server;
   the public viewer only ever hits the latter two.
 
-`/admin` and `/api` are the only paths gated by Cloudflare Access (email
-one-time-PIN, no external identity provider) -- see **Live editing
-(Cloudflare Workers)** below. Site data and media live in a Cloudflare R2
-bucket, read/written directly via a native R2 binding (no S3 SDK, no
-credentials in the data path).
+The viewer and all read routes are public. `/admin` and every write route
+(`POST`/`PUT`/`DELETE` under `/api`) are protected by HTTP Basic auth with a
+single shared password (any username), stored as the `ADMIN_PASSWORD` Worker
+secret.
+Site data and media live in a Cloudflare R2 bucket, read/written directly
+via a native R2 binding (no S3 SDK, no credentials in the data path).
 
-Everything -- compute, storage, DNS, and auth -- runs on Cloudflare. There is
-no other cloud provider involved; an earlier iteration ran as a Go server on
+Everything -- compute, storage, and DNS -- runs on Cloudflare. There is no
+other cloud provider involved; an earlier iteration ran as a Go server on
 Google Cloud Run, and before that the public read-only view was a separate,
 independently-deployed static site (`static/` + `tools/buildstatic`, synced
 to R2 by GitHub Actions, with its own preview server in `tools/localserve`).
@@ -145,14 +146,14 @@ account (see below).
 
 ## Live editing (Cloudflare Workers)
 
-The dynamic app runs as a server (`server/`), deployed as a Cloudflare Worker. `/` is public and
-read-only; `/admin` (the full CRUD editor) and `/api` require completing
-Cloudflare Access's email one-time-PIN, with the app's own dynamic
-allowlist (see **Managing access** above) deciding who's actually let
-through. Compute, storage, DNS, and auth are all Cloudflare-native -- see
-github issue #11 for the full phased migration this came from (replacing an
-earlier Cloud Run + IAP setup that couldn't be scripted end-to-end for a
-personal Google account).
+The dynamic app runs as a server (`server/`), deployed as a Cloudflare
+Worker. Every route -- `/`, `/admin` (the full CRUD editor), and `/api` --
+is public except `/admin` and the write routes under `/api`, which require
+HTTP Basic auth (see "Admin password" below).
+Compute, storage, and DNS are all Cloudflare-native -- see github issue #11
+for the full phased migration this came from (replacing an earlier Cloud
+Run + IAP setup that couldn't be scripted end-to-end for a personal Google
+account).
 
 ### Initial setup (one-time)
 
@@ -177,35 +178,18 @@ personal Google account).
    npx wrangler deploy
    ```
    `wrangler.toml`'s `[[routes]]` with `custom_domain = true` has Wrangler
-   provision the DNS record and SSL cert for `sites.xisle.net` itself --
+   provision the DNS record and SSL cert for `xisle.net` itself --
    no manual DNS record to maintain.
-4. **Enable Zero Trust on the account** (one-time, dashboard-only -- there's
-   no API for this first step): dash.cloudflare.com → Zero Trust → pick a
-   team name, Free plan.
-5. **Provision Cloudflare Access** with the idempotent setup script:
-   ```bash
-   CF_ACCOUNT_ID=<account-id> CF_ACCESS_TOKEN=<token> \
-     server/scripts/setup-access.sh sites.xisle.net
-   ```
-   The token needs "Access: Apps and Policies: Edit" and "Access:
-   Organizations, Identity Providers, and Groups: Edit" (My Profile → API
-   Tokens → Create Token). The script creates (or updates, if re-run) the
-   email one-time-PIN login method, a self-hosted Access application for the
-   domain, and a policy that just requires completing OTP (see **Managing
-   access** below for who's actually authorized -- that's not Access's job
-   here). By default it scopes the application to just `<domain>/admin*`
-   and `<domain>/api*` (matching the public/admin split above) -- pass
-   `--paths ""` before the domain to protect the whole hostname instead.
-   It also brands the Access login page and renames the Zero Trust team
-   domain -- see its header comment for the override env vars.
-6. **Seed the first allowed user** -- since authorization is a dynamic list
-   the app manages (not Access), someone has to be on it before anyone can
-   reach `/admin` to invite others:
-   ```bash
-   printf '%s' '{"emails":["you@example.com"]}' > /tmp/allowlist-seed.json
-   npx wrangler r2 object put xsites-live-data/access/allowlist.json \
-     --file=/tmp/allowlist-seed.json --content-type=application/json --remote
-   ```
+
+### Admin password
+
+Set (or rotate) the shared admin password as a Worker secret -- it is never
+stored in the repo:
+
+```bash
+cd server
+npx wrangler secret put ADMIN_PASSWORD
+```
 
 ### Applying updates
 
@@ -228,52 +212,23 @@ it. Because `PUBLIC_SITE` is just another R2 binding (not a separate set of
 credentials the way the old Cloud Run setup needed), this always runs --
 there's no "not configured yet" state to worry about.
 
-### Managing access
-
-Who can reach `/admin` and `/api` is a dynamic list the app itself owns
-(`server/src/accesslist.ts`, stored in `xsites-live-data` at
-`access/allowlist.json`) -- **not** Cloudflare Access's policy, which
-(per `setup-access.sh` above) just requires completing email OTP for
-*some* real, working email. Access proves identity; the app decides
-authorization.
-
-To grant someone access, from `/admin` open the hamburger menu → **Manage
-access…**, enter their email, and **Send invite**. Share the resulting
-link with them however you like (it's not emailed automatically) -- when
-they open it, their email is added to the allowlist and they're sent to
-`/admin`, where the normal OTP flow now succeeds for them. Invite links
-work once and expire after 7 days; both pending invites and existing
-users can be revoked from the same view.
-
 ## Portability
 
 `server/`'s request-handling code (`index.ts`'s routing, `siteyaml.ts`'s
 parsing, the `pmtiles` tile-serving logic) is written against plain
 `Request`/`Response`/`URL` -- the same shape Deno Deploy and Bun support
-natively, and Node 18+ can via a thin adapter. Two things are genuinely
-platform-specific, and both sit behind an interface for exactly that
-reason:
+natively, and Node 18+ can via a thin adapter. One thing is genuinely
+platform-specific, and sits behind an interface for exactly that reason:
 
-- **Storage** (`objectstore.ts`): `store.ts`, `publish.ts`, `tiles.ts`, and
-  `accesslist.ts` (the invite/allowlist system) all depend on the
-  `ObjectStore` interface (get/getRange/put/delete/list/exists on string
-  keys and ArrayBuffers), not on R2 directly. `R2ObjectStore`
-  is the only implementation today; adding an S3-compatible or
-  local-filesystem one is contained entirely to a new class satisfying
-  that interface -- nothing else changes.
-- **Auth** (`auth.ts`): `index.ts` calls an `Authenticator` for every
-  `/admin` and `/api` request and checks the result against the dynamic
-  allowlist itself (see **Managing access** above) -- authorization is
-  entirely the app's job, not something it trusts *something else* already
-  did. `CloudflareAccessAuthenticator` verifies Cloudflare Access's signed
-  JWT against the team's published keys (real signature verification via
-  Web Crypto, not just "a header is present") -- it's the only
-  implementation today, but the interface is small (one method: given a
-  `Request`, return an email or `null`), so a session/cookie-based
-  authenticator for a self-hosted deployment is a contained addition, not
-  a rewrite. Cloudflare Access itself only proves *some* real email was
-  verified via OTP (see **Live editing** below) -- it doesn't restrict
-  which one, since that's this app's decision to make.
+- **Storage** (`objectstore.ts`): `store.ts`, `publish.ts`, and `tiles.ts`
+  all depend on the `ObjectStore` interface (get/getRange/put/delete/list/
+  exists on string keys and ArrayBuffers), not on R2 directly.
+  `R2ObjectStore` is the only implementation today; adding an
+  S3-compatible or local-filesystem one is contained entirely to a new
+  class satisfying that interface -- nothing else changes.
+
+The auth layer is one small function (`requireAuth` in `index.ts`) comparing a
+shared password from the environment.
 
 What's *not* abstracted, because there's nothing generic to abstract it
 into: Workers Assets (static file serving) and `wrangler.toml`'s deploy

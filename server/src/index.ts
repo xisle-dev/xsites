@@ -4,9 +4,9 @@
 // Cloudflare-specific code in this whole file is CloudflareEnv and the two
 // lines in fetch() that wrap its R2 bindings into ObjectStore instances --
 // every handler below operates on Ctx (see objectstore.ts), never on a
-// storage-specific type. Auth is the other platform-specific piece (see
-// auth.ts): / is public, /admin and /api are gated by whatever
-// Authenticator fetch() is given -- CloudflareAccessAuthenticator today.
+// storage-specific type. The site is public to read; /admin and every
+// write route (POST/PUT/DELETE under /api) require HTTP Basic auth against
+// the ADMIN_PASSWORD secret (see requireAuth below).
 // Replaces the old Go server (server/ pre-rewrite) entirely; see github
 // issue #11 for the phased port this was built against.
 
@@ -26,23 +26,19 @@ import {
 import { handleTileRequest } from "./tiles";
 import { publishSiteChange, publishSiteRemoval, publishMedia, publishDeleteMedia, publishDeleteSiteMedia } from "./publish";
 import { R2ObjectStore, type ObjectStore } from "./objectstore";
-import { CloudflareAccessAuthenticator, type Authenticator } from "./auth";
-import { getAllowedEmails, isEmailAllowed, addAllowedEmail, removeAllowedEmail, createInvite, listInvites, revokeInvite, acceptInvite } from "./accesslist";
 
-// The raw shape Cloudflare hands fetch() -- R2 bindings plus the Access
-// team domain/app audience needed to verify a request's JWT. Nothing past
-// fetch() itself should reference this type.
+// The raw shape Cloudflare hands fetch() -- just the two R2 bindings.
+// Nothing past fetch() itself should reference this type.
 export interface CloudflareEnv {
   LIVE_DATA: R2Bucket;
   PUBLIC_SITE: R2Bucket;
-  ACCESS_TEAM_DOMAIN: string;
-  ACCESS_AUD: string;
+  ASSETS: Fetcher;
+  ADMIN_PASSWORD: string;
 }
 
 interface Ctx {
   live: ObjectStore;
   publicStore: ObjectStore;
-  auth: Authenticator;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -53,8 +49,7 @@ function errorResponse(status: number, message: string): Response {
   return json({ error: message }, status);
 }
 
-// GET /api/sites and GET /sites.json (the latter unauthenticated, for the
-// public viewer) both read this same pre-aggregated snapshot rather than
+// GET /api/sites and GET /sites.json (for the public viewer) both read this same pre-aggregated snapshot rather than
 // fetching every site individually from LIVE_DATA -- safe for the
 // authenticated list too, not just the public one, because every write
 // handler below awaits publishSiteChange/publishSiteRemoval before
@@ -307,70 +302,54 @@ async function handleGetMedia(ctx: Ctx, id: string, filename: string): Promise<R
   }
 }
 
-async function handleListAllowlist(ctx: Ctx): Promise<Response> {
-  return json(await getAllowedEmails(ctx.live));
+// SHA-256 both sides first so the comparison is constant-length and the
+// timing doesn't leak how much of the password matched.
+async function digest(text: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
 }
 
-async function handleRevokeAllowlist(ctx: Ctx, emailSegment: string): Promise<Response> {
-  await removeAllowedEmail(ctx.live, decodeURIComponent(emailSegment));
-  return json({ ok: true });
+async function passwordMatches(given: string, expected: string): Promise<boolean> {
+  const [a, b] = await Promise.all([digest(given), digest(expected)]);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
 }
 
-async function handleListInvites(ctx: Ctx): Promise<Response> {
-  return json(await listInvites(ctx.live));
-}
-
-async function handleCreateInvite(ctx: Ctx, request: Request): Promise<Response> {
-  let body: { email?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse(400, "invalid JSON body");
+// HTTP Basic auth with a single shared password; the username is ignored.
+// Returns a 401 challenge (which makes the browser prompt, then resend the
+// credentials on every same-origin request) or null if the caller may proceed.
+async function requireAuth(request: Request, env: CloudflareEnv): Promise<Response | null> {
+  const header = request.headers.get("Authorization") ?? "";
+  if (env.ADMIN_PASSWORD && header.startsWith("Basic ")) {
+    try {
+      const decoded = atob(header.slice(6));
+      const password = decoded.slice(decoded.indexOf(":") + 1);
+      if (await passwordMatches(password, env.ADMIN_PASSWORD)) return null;
+    } catch {
+      // malformed base64 -- fall through to the challenge
+    }
   }
-  const email = (body.email ?? "").trim();
-  if (email === "" || !email.includes("@")) return errorResponse(400, "a valid email is required");
-  return json(await createInvite(ctx.live, email), 201);
+  return new Response("Authentication required", {
+    status: 401,
+    headers: { "WWW-Authenticate": 'Basic realm="xsites admin", charset="UTF-8"' },
+  });
 }
 
-async function handleRevokeInvite(ctx: Ctx, token: string): Promise<Response> {
-  await revokeInvite(ctx.live, token);
-  return json({ ok: true });
+function needsAuth(method: string, segments: string[]): boolean {
+  if (segments[0] === "admin") return true;
+  if (segments[0] === "api") return method !== "GET" && method !== "HEAD";
+  return false;
 }
 
-// Public -- no auth required to reach this path (that's the point: the
-// invitee doesn't have access yet). Only does anything if the token is a
-// valid, unexpired, not-yet-accepted invite (see accesslist.ts's
-// acceptInvite); anything else shows an error rather than silently
-// granting access. Cloudflare Access itself still requires completing
-// email OTP before the redirect target (/admin) actually succeeds -- this
-// endpoint only pre-authorizes the email in our own allowlist, it doesn't
-// create a session or bypass Access.
-async function handleAcceptInvite(ctx: Ctx, token: string): Promise<Response> {
-  const invite = await acceptInvite(ctx.live, token);
-  if (!invite) {
-    return new Response(
-      `<!doctype html><title>Invalid invite</title>
-<body style="font-family:sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#14161a">
-<h1>This invite link isn't valid</h1>
-<p>It may have expired, already been used, or the link may be incorrect. Ask whoever invited you to send a new one.</p>
-</body>`,
-      { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } },
-    );
-  }
-  return new Response(null, { status: 302, headers: { Location: "/admin/" } });
-}
-
-// /admin and /api are the only gated paths (see README's Live editing
-// section) -- everything else (/, static assets, /sites.json, /media/*,
-// /tiles/*, /invite/<token>) is intentionally public.
-function requiresAuth(segments: string[]): boolean {
-  return segments[0] === "admin" || segments[0] === "api";
-}
-
-async function dispatch(ctx: Ctx, request: Request): Promise<Response> {
+async function dispatch(ctx: Ctx, env: CloudflareEnv, request: Request): Promise<Response> {
   const url = new URL(request.url);
   const method = request.method;
   const segments = url.pathname.split("/").filter(Boolean); // ["api","sites",...] etc.
+
+  if (needsAuth(method, segments)) {
+    const denied = await requireAuth(request, env);
+    if (denied) return denied;
+  }
 
   if (segments.length === 1 && segments[0] === "sites.json" && method === "GET") {
     return await handleSitesJson(ctx);
@@ -391,69 +370,29 @@ async function dispatch(ctx: Ctx, request: Request): Promise<Response> {
       if (method === "PUT") return await handleUpdateMedia(ctx, id, filename, request);
       if (method === "DELETE") return await handleDeleteMedia(ctx, id, filename);
     }
+  } else if (segments[0] === "admin" && method === "GET") {
+    // Static editor files; only reached because wrangler.toml's
+    // run_worker_first routes /admin/* through this Worker for the auth check.
+    return await env.ASSETS.fetch(request);
   } else if (segments[0] === "media" && segments.length === 3 && method === "GET") {
     return await handleGetMedia(ctx, segments[1], segments[2]);
   } else if (segments[0] === "tiles" && method === "GET") {
     const tileResponse = await handleTileRequest(request, ctx.publicStore);
     if (tileResponse) return tileResponse;
-  } else if (segments[0] === "api" && segments[1] === "access") {
-    if (segments[2] === "allowlist") {
-      if (segments.length === 3 && method === "GET") return await handleListAllowlist(ctx);
-      if (segments.length === 4 && method === "DELETE") return await handleRevokeAllowlist(ctx, segments[3]);
-    } else if (segments[2] === "invites") {
-      if (segments.length === 3) {
-        if (method === "GET") return await handleListInvites(ctx);
-        if (method === "POST") return await handleCreateInvite(ctx, request);
-      } else if (segments.length === 4 && method === "DELETE") {
-        return await handleRevokeInvite(ctx, segments[3]);
-      }
-    }
-  } else if (segments[0] === "invite" && segments.length === 2 && method === "GET") {
-    return await handleAcceptInvite(ctx, segments[1]);
   }
 
   return new Response("Not found", { status: 404 });
 }
 
-// Module-scoped, not per-request: a Worker isolate stays warm across many
-// requests, and CloudflareAccessAuthenticator caches the team's JWKS
-// in-instance for an hour (see auth.ts) specifically to avoid a network
-// fetch on every authenticated request. Constructing a fresh authenticator
-// inside fetch() would throw that cache away every single request --
-// exactly what was causing a multi-second delay on every /admin and /api
-// call while signed in (unauthenticated requests never hit this path at
-// all, since authenticate() short-circuits before fetching JWKS when
-// there's no token to verify -- which is why only the signed-in case was
-// slow).
-let sharedAuthenticator: CloudflareAccessAuthenticator | null = null;
-
 export default {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
-    if (!sharedAuthenticator) {
-      sharedAuthenticator = new CloudflareAccessAuthenticator(env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD);
-    }
     const ctx: Ctx = {
       live: new R2ObjectStore(env.LIVE_DATA),
       publicStore: new R2ObjectStore(env.PUBLIC_SITE),
-      auth: sharedAuthenticator,
     };
 
-    const url = new URL(request.url);
-    const segments = url.pathname.split("/").filter(Boolean);
-
-    if (requiresAuth(segments)) {
-      const identity = await ctx.auth.authenticate(request);
-      // The allowlist is dynamic (see accesslist.ts) -- deliberately not
-      // cached, unlike the JWKS above: it's small (one object), read on
-      // every gated request, and correctness after an invite-accept or a
-      // revoke matters more here than shaving off one more R2 read.
-      if (!identity || !(await isEmailAllowed(ctx.live, identity.email))) {
-        return ctx.auth.challenge(request);
-      }
-    }
-
     try {
-      return await dispatch(ctx, request);
+      return await dispatch(ctx, env, request);
     } catch (err) {
       return errorResponse(500, err instanceof Error ? err.message : String(err));
     }

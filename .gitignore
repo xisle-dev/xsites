@@ -16,7 +16,3 @@ etl/output/*.pmtiles
 
 # Server dependencies -- reinstall with: cd server && npm install
 server/node_modules/
-
-# One-off Cloudflare API token (Access: Apps and Policies edit) used to
-# script the Zero Trust setup in Phase H -- never committed.
-server/.cf-access-admin-token

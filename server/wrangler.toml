@@ -7,7 +7,7 @@ compatibility_date = "2026-09-01"
 # rather than a plain Route needing a separately hand-maintained DNS record.
 # See github issue #20.
 [[routes]]
-pattern = "sites.xisle.net"
+pattern = "xisle.net"
 custom_domain = true
 
 # Editor frontend (index.html, app.js, style.css, logo/favicon.svg,
@@ -17,6 +17,10 @@ custom_domain = true
 # /media/*) falls through to the Worker script below.
 [assets]
 directory = "./public"
+binding = "ASSETS"
+# /admin and /api go through the Worker first so it can enforce Basic auth
+# (secret ADMIN_PASSWORD: `npx wrangler secret put ADMIN_PASSWORD`).
+run_worker_first = ["/admin", "/admin/*", "/api/*"]
 
 # LIVE_DATA: the live-editable source of truth (per-site YAML objects +
 # media), read/written by every /api/sites request -- see github issue #11
@@ -32,16 +36,3 @@ bucket_name = "xsites-live-data"
 [[r2_buckets]]
 binding = "PUBLIC_SITE"
 bucket_name = "xsites"
-
-# Cloudflare Access config, read by auth.ts -- not secret (an audience tag
-# and team domain are effectively public identifiers), so plain vars rather
-# than secrets. ACCESS_AUD is the "xsites editor" Access application's aud
-# tag (Zero Trust dashboard -> Access -> Applications -> the app -> Overview).
-# Who's actually allowed in is a *separate* concern now -- a dynamic
-# allowlist in LIVE_DATA (see accesslist.ts), managed via invites from
-# /admin, not a static list here. Access's own policy just requires
-# completing email OTP (see setup-access.sh); it doesn't restrict which
-# email, since this app enforces that itself.
-[vars]
-ACCESS_TEAM_DOMAIN = "xsites.cloudflareaccess.com"
-ACCESS_AUD = "8bcfeafd108027da706e730bbb68c72dea524bf2429750da57eff4908471a905"

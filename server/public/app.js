@@ -5,8 +5,8 @@
 // /api/sites, labels come from the Worker's /tiles/* proxy (same route the
 // editor uses, see worker/src/tiles.ts) rather than a direct .pmtiles range
 // read, and there's no add/edit/delete/upload UI -- this build has nowhere
-// to write changes back to. Sign in (top-right) to reach the full editor at
-// /admin/, gated by Cloudflare Access.
+// to write changes back to. Follow the link (top-right) to reach the full
+// editor at /admin/.
 import {
   Map,
   Marker,
@@ -1622,12 +1622,9 @@ const siteSearch = document.getElementById("siteSearch");
 const areaFilter = document.getElementById("areaFilter");
 const siteDetailContent = document.getElementById("siteDetailContent");
 
-// The public viewer is read-only -- it has no session and no write access
-// to the API -- so "+ Add" and "Edit" don't open a form here. They send
-// the browser to /admin/ instead, which sits behind Cloudflare Access: an
-// already-signed-in editor lands straight on the form (?site= deep-links
-// to the right one), while anyone else gets Access's own sign-in prompt
-// first and is bounced back to the same destination afterward.
+// The public viewer has no add/edit UI of its own -- "+ Add" and "Edit"
+// send the browser to /admin/ instead, which has the actual forms
+// (?site= deep-links straight to the right one).
 document.getElementById("addSiteBtn").addEventListener("click", () => {
   window.location.href = "/admin/";
 });
