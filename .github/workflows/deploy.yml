@@ -1,0 +1,40 @@
+# Deploys the Worker (server/src) and its static files (server/public,
+# including data/airspace.geojson) to Cloudflare on every push to main that
+# touches server/. Replaces running `npx wrangler deploy` locally -- nothing
+# here needs Node, npm or wrangler on your own machine.
+#
+# Secrets: CLOUDFLARE_API_TOKEN (Workers Scripts: Edit), CLOUDFLARE_ACCOUNT_ID.
+# ADMIN_PASSWORD is a Worker secret in Cloudflare and is not touched here.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["server/**", ".github/workflows/deploy.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: server
+          command: deploy

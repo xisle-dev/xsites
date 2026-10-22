@@ -1,0 +1,52 @@
+# Rebuilds the Vancouver Island label tiles from a Protomaps daily build and
+# uploads them to R2 (xsites/tiles/labels-vancouver-island.pmtiles). The
+# ~200 MB archive never touches git. Run by hand when you want fresher
+# labels; the Worker picks up the new file immediately, no deploy needed.
+#
+# Secrets: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+# (an R2 API token with Object Read & Write on the xsites bucket).
+name: Tiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Protomaps build date YYYYMMDD (blank = latest)"
+        required: false
+        default: ""
+
+jobs:
+  tiles:
+    runs-on: ubuntu-latest
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: etl/go.mod
+          cache-dependency-path: etl/go.sum
+      - name: Build labels-vancouver-island.pmtiles
+        working-directory: etl
+        env:
+          BUILD_DATE: ${{ inputs.date }}
+        run: go run . tiles $BUILD_DATE
+      - name: Sanity-check size
+        run: |
+          size=$(stat -c %s etl/output/labels-vancouver-island.pmtiles)
+          echo "pmtiles: $size bytes"
+          if [ "$size" -lt 20000000 ]; then
+            echo "::error::pmtiles is only $size bytes; expected ~200 MB"
+            exit 1
+          fi
+      - name: Install rclone
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+      - name: Upload to R2
+        run: |
+          rclone copyto etl/output/labels-vancouver-island.pmtiles \
+            r2:xsites/tiles/labels-vancouver-island.pmtiles \
+            --s3-no-check-bucket --header-upload "Content-Type: application/octet-stream" -v
