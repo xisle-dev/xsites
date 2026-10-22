@@ -208,7 +208,7 @@ machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` | push to `main` touching `server/`, or by hand | typecheck, then `wrangler deploy` |
+| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, then `wrangler deploy` |
 | `airspace.yml` | 1st of each month, or by hand | `etl airspace`, copies it into `server/public/data/`, opens a PR to review; merging deploys it |
 | `tiles.yml` | by hand (optional build date) | `etl tiles`, uploads the `.pmtiles` to R2 `xsites/tiles/` with rclone |
 | `backup.yml` | nightly, or by hand | `rclone sync` of R2 `xsites-live-data` into a private backup repo, committed only on change |

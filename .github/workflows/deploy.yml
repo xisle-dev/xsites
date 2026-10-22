@@ -1,5 +1,5 @@
 # Deploys the Worker (server/src) and its static files (server/public,
-# including data/airspace.geojson) to Cloudflare on every push to main that
+# including data/airspace.geojson) to Cloudflare on every push to master that
 # touches server/. Replaces running `npx wrangler deploy` locally -- nothing
 # here needs Node, npm or wrangler on your own machine.
 #
@@ -9,7 +9,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths: ["server/**", ".github/workflows/deploy.yml"]
   workflow_dispatch:
 
