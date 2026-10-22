@@ -215,12 +215,18 @@ machine -- no Node, npm or wrangler needed locally:
 
 One-time setup:
 
-1. **Cloudflare API token** (My Profile > API Tokens, "Edit Cloudflare
-   Workers" template) -> repo secret `CLOUDFLARE_API_TOKEN`. Your account ID
-   -> repo secret `CLOUDFLARE_ACCOUNT_ID`.
-2. **R2 API token** (R2 > Manage API tokens, Object Read & Write on
-   `xsites` and `xsites-live-data`) -> repo secrets `R2_ACCESS_KEY_ID` and
-   `R2_SECRET_ACCESS_KEY`.
+1. **Cloudflare API token**: in the Cloudflare dashboard, open the
+   **Account API tokens** page, select **Create Token**, and under
+   **Permission policies** open the **Custom** dropdown and pick **Edit
+   Cloudflare Workers**. Scope it to your account and the `xisle.net`
+   zone, create it, and save it as repo secret `CLOUDFLARE_API_TOKEN`.
+   **Account ID**: on **Workers & Pages**, copy it from **Account Details**
+   (or press Ctrl+K on the account home page and run "Copy account ID");
+   save it as repo secret `CLOUDFLARE_ACCOUNT_ID`.
+2. **R2 API token**: on **R2 Object Storage**, select **Manage API
+   tokens**, create a token with **Object Read & Write** on `xsites` and
+   `xsites-live-data`, and save its Access Key ID and Secret Access Key as
+   repo secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`.
 3. **Backup repo**: create a private repo (e.g. `xisle-dev/xsites-backup`),
    run `ssh-keygen -t ed25519 -f backup_key -N ""`, add `backup_key.pub` to
    it as a deploy key with write access, add `backup_key` to this repo as
