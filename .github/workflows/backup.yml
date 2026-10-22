@@ -1,0 +1,46 @@
+# Nightly backup of the live site data (R2 xsites-live-data: every
+# sites/<id>.yaml and its media) into a separate PRIVATE repo, committed
+# only when something changed -- so git history there is a dated record of
+# every edit. Restore with: rclone sync <backup checkout>/data r2:xsites-live-data
+#
+# Secrets: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+# BACKUP_DEPLOY_KEY (private half of an SSH deploy key with write access
+# on the backup repo). Variable: BACKUP_REPO (e.g. xisle-dev/xsites-backup).
+name: Backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 10 * * *" # daily, ~3:30am Pacific
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.BACKUP_REPO }}
+          ssh-key: ${{ secrets.BACKUP_DEPLOY_KEY }}
+          path: backup
+      - name: Install rclone
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+      - name: Copy live data from R2
+        run: rclone sync r2:xsites-live-data backup/data -v
+      - name: Commit if changed
+        working-directory: backup
+        run: |
+          git add -A data
+          if git diff --cached --quiet; then
+            echo "No changes since last backup."
+            exit 0
+          fi
+          git config user.name "xsites backup"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Backup $(date -u +%Y-%m-%d)"
+          git push

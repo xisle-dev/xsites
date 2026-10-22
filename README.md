@@ -201,6 +201,37 @@ npx wrangler deploy
 Wrangler re-uploads changed static assets (`server/public/`) and the server
 script together; no image build, no container registry.
 
+### GitHub Actions
+
+Four workflows in `.github/workflows/` take every routine job off your own
+machine -- no Node, npm or wrangler needed locally:
+
+| Workflow | Runs | Does |
+| --- | --- | --- |
+| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, then `wrangler deploy` |
+| `airspace.yml` | 1st of each month, or by hand | `etl airspace`, copies it into `server/public/data/`, opens a PR to review; merging deploys it |
+| `tiles.yml` | by hand (optional build date) | `etl tiles`, uploads the `.pmtiles` to R2 `xsites/tiles/` with rclone |
+| `backup.yml` | nightly, or by hand | `rclone sync` of R2 `xsites-live-data` into a private backup repo, committed only on change |
+
+One-time setup:
+
+1. **Cloudflare API token** (My Profile > API Tokens, "Edit Cloudflare
+   Workers" template) -> repo secret `CLOUDFLARE_API_TOKEN`. Your account ID
+   -> repo secret `CLOUDFLARE_ACCOUNT_ID`.
+2. **R2 API token** (R2 > Manage API tokens, Object Read & Write on
+   `xsites` and `xsites-live-data`) -> repo secrets `R2_ACCESS_KEY_ID` and
+   `R2_SECRET_ACCESS_KEY`.
+3. **Backup repo**: create a private repo (e.g. `xisle-dev/xsites-backup`),
+   run `ssh-keygen -t ed25519 -f backup_key -N ""`, add `backup_key.pub` to
+   it as a deploy key with write access, add `backup_key` to this repo as
+   secret `BACKUP_DEPLOY_KEY`, and set repo variable `BACKUP_REPO` to the
+   backup repo's `owner/name`.
+4. **Settings > Actions > General**: enable "Allow GitHub Actions to create
+   and approve pull requests" (needed by `airspace.yml`).
+
+To restore live data from a backup checkout:
+`rclone sync data r2:xsites-live-data`.
+
 ### Instant publish
 
 `server/src/publish.ts` mirrors every save into the `xsites` bucket's
