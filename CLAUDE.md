@@ -27,6 +27,15 @@ go run . airspace          # OpenAIP -> etl/output/airspace.geojson
 go run . tiles [YYYYMMDD]  # Protomaps extract -> etl/output/labels-vancouver-island.pmtiles (~200MB, gitignored)
 ```
 
+Setup (`setup/`, Go, run once per account or to rotate credentials):
+
+```bash
+cd setup
+go run . -deploy   # needs CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_BOOTSTRAP_TOKEN, ADMIN_PASSWORD; gh auth
+```
+
+Creates the Cloudflare tokens and R2 buckets and writes every GitHub secret the workflows in `.github/workflows/` need -- see README "GitHub Actions".
+
 ## Architecture
 
 One Worker (`server/src/index.ts`) serves everything; `server/public/` is the sole source of truth for served static files.

@@ -3,8 +3,9 @@
 # touches server/. Replaces running `npx wrangler deploy` locally -- nothing
 # here needs Node, npm or wrangler on your own machine.
 #
-# Secrets: CLOUDFLARE_API_TOKEN (Workers Scripts: Edit), CLOUDFLARE_ACCOUNT_ID.
-# ADMIN_PASSWORD is a Worker secret in Cloudflare and is not touched here.
+# Secrets (all written by `go run ./setup`): CLOUDFLARE_API_TOKEN,
+# CLOUDFLARE_ACCOUNT_ID, and ADMIN_PASSWORD, which every deploy pushes to the
+# Worker as its secret so GitHub is the one place it's kept.
 name: Deploy
 
 on:
@@ -38,3 +39,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: server
           command: deploy
+          secrets: |
+            ADMIN_PASSWORD
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

@@ -213,21 +213,48 @@ machine -- no Node, npm or wrangler needed locally:
 | `tiles.yml` | by hand (optional build date) | `etl tiles`, uploads the `.pmtiles` to R2 `xsites/tiles/` with rclone |
 | `backup.yml` | nightly, or by hand | `rclone sync` of R2 `xsites-live-data` into a private backup repo, committed only on change |
 
-One-time setup:
+One-time setup is a single command, `setup/` (Go, stdlib plus
+`golang.org/x/crypto`), which builds everything below through the
+Cloudflare and GitHub APIs. Every step is safe to re-run:
 
-1. **Cloudflare API token** (My Profile > API Tokens, "Edit Cloudflare
-   Workers" template) -> repo secret `CLOUDFLARE_API_TOKEN`. Your account ID
-   -> repo secret `CLOUDFLARE_ACCOUNT_ID`.
-2. **R2 API token** (R2 > Manage API tokens, Object Read & Write on
-   `xsites` and `xsites-live-data`) -> repo secrets `R2_ACCESS_KEY_ID` and
-   `R2_SECRET_ACCESS_KEY`.
-3. **Backup repo**: create a private repo (e.g. `xisle-dev/xsites-backup`),
-   run `ssh-keygen -t ed25519 -f backup_key -N ""`, add `backup_key.pub` to
-   it as a deploy key with write access, add `backup_key` to this repo as
-   secret `BACKUP_DEPLOY_KEY`, and set repo variable `BACKUP_REPO` to the
-   backup repo's `owner/name`.
-4. **Settings > Actions > General**: enable "Allow GitHub Actions to create
-   and approve pull requests" (needed by `airspace.yml`).
+- Cloudflare token `xsites-deploy` (Workers scripts/routes, R2, DNS) and
+  the R2 buckets `xsites` and `xsites-live-data`
+- Cloudflare token `xsites-r2` (object read/write on those two buckets
+  only), converted to R2 S3 keys
+- Repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `ADMIN_PASSWORD`,
+  `BACKUP_DEPLOY_KEY` and variable `BACKUP_REPO`
+- The private backup repo (`xisle-dev/xsites-backup`) and its deploy key
+- "Allow GitHub Actions to create and approve pull requests"
+
+Re-running rotates both Cloudflare token values and the deploy key and
+writes the new ones into GitHub, so a re-run is also how you rotate
+credentials.
+
+It needs two credentials that no API can create for you:
+
+1. **Cloudflare bootstrap token**: at
+   <https://dash.cloudflare.com/profile/api-tokens>, select **Create Token**
+   and use the **Create Additional Tokens** template. It can only mint
+   other tokens; give it a short expiry (a day) and delete it afterwards.
+2. **GitHub**: `gh auth login` once (or set `GITHUB_TOKEN` to a token with
+   `repo` scope).
+
+Then, in PowerShell:
+
+```powershell
+cd setup
+$env:CLOUDFLARE_ACCOUNT_ID = "<account id>"
+$env:CLOUDFLARE_BOOTSTRAP_TOKEN = "<bootstrap token>"
+$env:ADMIN_PASSWORD = "<admin password>"   # first run, or to change it
+go run . -deploy
+```
+
+The account ID is the hex string in your dashboard URL
+(`dash.cloudflare.com/<account id>/...`). `-deploy` runs the Deploy
+workflow at the end; on a brand-new account, also run the Tiles workflow
+once to upload the label archive. `ADMIN_PASSWORD` now lives in GitHub and
+every deploy pushes it to the Worker.
 
 To restore live data from a backup checkout:
 `rclone sync data r2:xsites-live-data`.
