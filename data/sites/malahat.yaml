@@ -1,0 +1,21 @@
+name: Malahat
+area: Victoria
+description: <p>About an hour hike. CYA nust be opened be a designated delegate. Check the WHATSAPP group.</p><p><br></p><p>Landing is at Bamberton beach</p><p><br></p><p>Walk in access is from Spectacle lake or Mill Bay Road </p>
+hazards: <p>No LZ at high tide</p>
+latitude: 48.59093
+longitude: -123.541249
+elevation_m: 784
+view_latitude: 48.592615
+view_longitude: -123.541197
+view_zoom: 16.25
+view_bearing: -80.2
+view_pitch: 57.5
+references:
+    - type: gpx
+      title: Malahat_Section_2.gpx
+      description: Top Section
+      url: /media/malahat/Malahat_Section_2.gpx
+    - type: gpx
+      title: Malahat.gpx
+      description: Bottom Section
+      url: /media/malahat/Malahat.gpx
