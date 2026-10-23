@@ -85,12 +85,12 @@ func main() {
 	}
 	s.backups()
 
-	// Only the Airspace workflow's PRs depend on this, so a refusal is a
+	// Only the Update workflow's PRs depend on this, so a refusal is a
 	// warning rather than a reason to stop before deploying.
 	step("Allowing GitHub Actions to open pull requests")
 	if err := s.gh.allowActionsPRs(s.repo); err != nil {
 		fmt.Println("    WARNING: " + err.Error())
-		fmt.Println("    Everything else is set up; only the Airspace workflow's pull requests need this.")
+		fmt.Println("    Everything else is set up; only the Update workflow's pull requests need this.")
 	}
 
 	if *deploy {
@@ -105,7 +105,6 @@ func main() {
 	if !*deploy {
 		fmt.Println("Next: push to the default branch, or re-run with -deploy, to deploy.")
 	}
-	fmt.Println("First time only: run the Tiles workflow for each environment, and Seed QA once a backup exists.")
 }
 
 type setup struct {

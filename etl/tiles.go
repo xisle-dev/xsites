@@ -83,5 +83,20 @@ func runTiles(args []string) {
 	if err := pmtiles.Extract(ctx, logger, "", buildURL, -1, -1, "", tilesBbox, outPath, 4, 0.05, false); err != nil {
 		log.Fatalf("extracting tiles: %v", err)
 	}
+	// The build date beside it, so whoever uploads the archive can record
+	// which build it is (the Deploy workflow compares it to tiles-date.txt).
+	if err := os.WriteFile(filepath.Join("output", "labels-vancouver-island.date"), []byte(date.Format("20060102")+"\n"), 0644); err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("wrote %s", outPath)
+}
+
+// runTilesLatest prints the date of the newest Protomaps build, which the
+// Update workflow pins in tiles-date.txt.
+func runTilesLatest() {
+	date, _, err := findLatestBuild(time.Now())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(date.Format("20060102"))
 }

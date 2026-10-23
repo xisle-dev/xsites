@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "xsite",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["wrangler", "dev", "--remote", "--config", "server/wrangler.toml"],
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./dev"],
       "port": 8787
     }
   ]

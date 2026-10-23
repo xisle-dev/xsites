@@ -1,0 +1,68 @@
+# Checks for newer airspace and tiles and, if either changed, opens one pull
+# request with them:
+#  - airspace: regenerated from OpenAIP's public export into
+#    server/public/data/airspace.geojson
+#  - tiles: etl/tiles-date.txt bumped to the newest Protomaps build
+# Airspace is safety-relevant, so a person reviews and merges the PR. The
+# merge deploys both to QA (see deploy.yml); run Deploy on master for PROD.
+#
+# No secrets needed. Requires Settings > Actions > General > "Allow GitHub
+# Actions to create and approve pull requests" (setup turns it on).
+name: Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 14 1 * *" # 1st of each month
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: etl/go.mod
+          cache-dependency-path: etl/go.sum
+      - name: Build airspace.geojson
+        working-directory: etl
+        run: go run . airspace
+      # A bad trim shows up as a wildly different size -- fail rather than
+      # open a PR with an obviously broken file. Today's is ~320 KB.
+      - name: Sanity-check airspace size
+        run: |
+          size=$(stat -c %s etl/output/airspace.geojson)
+          echo "airspace.geojson: $size bytes"
+          if [ "$size" -lt 50000 ] || [ "$size" -gt 5000000 ]; then
+            echo "::error::airspace.geojson is $size bytes, outside the expected 50 KB - 5 MB range"
+            exit 1
+          fi
+          cp etl/output/airspace.geojson server/public/data/airspace.geojson
+      - name: Find the latest tiles build
+        working-directory: etl
+        run: |
+          echo "tiles: was $(cat tiles-date.txt)"
+          go run . tiles-latest > tiles-date.txt
+          echo "tiles: now $(cat tiles-date.txt)"
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: data-update
+          delete-branch: true
+          commit-message: "Update airspace and tiles"
+          title: "Update airspace and tiles"
+          body: |
+            Made by the Update workflow:
+            - airspace regenerated from OpenAIP's Canada export, trimmed to
+              the Vancouver Island flying area (review the diff)
+            - `etl/tiles-date.txt` set to the newest Protomaps build
+
+            Merging deploys to QA, rebuilding tiles if the date changed.
+            Run Deploy on master to take it to PROD.
+          add-paths: |
+            etl/output/airspace.geojson
+            server/public/data/airspace.geojson
+            etl/tiles-date.txt

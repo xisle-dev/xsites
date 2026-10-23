@@ -128,7 +128,7 @@ func (g *github) currentUserID() (int64, error) {
 }
 
 // allowActionsPRs turns on "Allow GitHub Actions to create and approve pull
-// requests", which the Airspace workflow needs. For an org-owned repo the
+// requests", which the Update workflow needs. For an org-owned repo the
 // org's own setting has to allow it first, so when the repo-level call is
 // refused for that reason (409) it's turned on at the org level too -- that
 // needs the admin:org scope, which `gh auth login` doesn't grant by default.
