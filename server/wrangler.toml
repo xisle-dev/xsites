@@ -1,4 +1,4 @@
-name = "xsites-editor"
+name = "xsites-prod"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
@@ -29,11 +29,12 @@ run_worker_first = ["/admin", "/admin/*", "/api/*"]
 binding = "DATA"
 bucket_name = "xsites-prod"
 
-# QA: a fully separate Worker (xsites-editor-qa), domain and bucket
+# QA: a fully separate Worker (xsites-qa), domain and bucket
 # in the same Cloudflare account, deployed with `wrangler deploy --env qa`.
 # Nothing here is shared with PROD above except the code and static files.
 # r2_buckets aren't inherited by environments, so it's redeclared.
 [env.qa]
+name = "xsites-qa"
 routes = [{ pattern = "qa.xisle.net", custom_domain = true }]
 
 [[env.qa.r2_buckets]]
