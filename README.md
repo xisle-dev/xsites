@@ -129,20 +129,37 @@ dialect (see `server/src/siteyaml.ts`'s header comment). All reads and
 writes from the editor go here, via a native R2 binding -- there's no
 local disk, no repo-checked-in copy, and no S3-style credentials involved.
 
-## Running it
+## Environments
 
-Run the server locally with Wrangler, against real R2 buckets (no
-local-disk mode):
+| | DEV | QA | PROD |
+| --- | --- | --- | --- |
+| Runs | your PC, `go run ./dev` | Cloudflare Worker `xsites-editor-qa` | Cloudflare Worker `xsites-editor` |
+| URL | <http://localhost:8787> | <https://qa.xisle.net> | <https://xisle.net> |
+| Site data | `dev/data/` (local files) | R2 `xsites-live-data-qa` | R2 `xsites-live-data` |
+| Gets code by | live from the repo | **Deploy**: every merge to `master`, or Run workflow on any other branch | **Deploy**: Run workflow on `master`, after your approval |
+
+### DEV
+
+Needs only Go -- no Node, npm, wrangler or Cloudflare login:
 
 ```bash
-cd server
-npm install
-npm run dev   # wrangler dev --remote --env qa (QA's buckets)
+go run ./dev        # from the repo root; or: cd dev && go run .
 ```
 
-Then open http://127.0.0.1:8787. This needs `wrangler login` once, and
-access to QA's `xsites-live-data-qa` R2 bucket on the Cloudflare account
-(see below).
+Then open <http://localhost:8787> (viewer) and <http://localhost:8787/admin/>
+(editor, no password locally).
+
+- Web files are served straight from `server/public/`; save a file and every
+  open page reloads. No `?v=` bump needed locally (nothing is cached).
+- Site data lives in `dev/data/` (gitignored) with the same layout as an R2
+  bucket. The first run fills it from the `backup` branch (a copy of PROD);
+  delete `dev/data/` to start over. Edits stay on your PC.
+- Label tiles come from `etl/output/labels-vancouver-island.pmtiles`; build
+  them once with `cd etl && go run . tiles`.
+- The API is a Go stand-in (`dev/api.go`, `dev/siteyaml.go`) for the Worker
+  in `server/src/`. If you change the Worker's routes or the site YAML
+  format, change `dev/` to match. Restart `go run ./dev` after changing
+  Go code.
 
 ## Live editing (Cloudflare Workers)
 
@@ -155,54 +172,9 @@ for the full phased migration this came from (replacing an earlier Cloud
 Run + IAP setup that couldn't be scripted end-to-end for a personal Google
 account).
 
-### Initial setup (one-time)
-
-(Normally all done by `go run ./setup` and the workflows -- see **GitHub
-Actions** below. The manual equivalent for PROD:)
-
-1. **One R2 bucket**: `xsites-live-data`, holding the site YAML and media
-   (`sites/`), the derived `sites.json`, and the PMTiles archive
-   (`tiles/`). It's declared as the `DATA` binding in
-   `server/wrangler.toml` -- no separate credentials needed for the server
-   to read/write it.
-2. **Upload the `.pmtiles` label archive** to it once (it's too large for
-   git and rarely changes):
-   ```bash
-   npx wrangler r2 object put xsites-live-data/tiles/labels-vancouver-island.pmtiles \
-     --file=etl/output/labels-vancouver-island.pmtiles \
-     --content-type=application/octet-stream --remote
-   ```
-   (`--remote` matters -- without it, `wrangler r2 object put` writes to
-   Miniflare's local simulated storage instead of the real bucket.)
-3. **Deploy the server**:
-   ```bash
-   cd server
-   npm install
-   npx wrangler deploy
-   ```
-   `wrangler.toml`'s `[[routes]]` with `custom_domain = true` has Wrangler
-   provision the DNS record and SSL cert for `xisle.net` itself --
-   no manual DNS record to maintain.
-
-### Admin password
-
-Set (or rotate) the shared admin password as a Worker secret -- it is never
-stored in the repo:
-
-```bash
-cd server
-npx wrangler secret put ADMIN_PASSWORD
-```
-
-### Applying updates
-
-```bash
-cd server
-npx wrangler deploy
-```
-
-Wrangler re-uploads changed static assets (`server/public/`) and the server
-script together; no image build, no container registry.
+Everything below is done by `go run ./setup` (once) and the **Deploy**
+workflow (every time) -- see **GitHub Actions**. Nothing is deployed from
+your PC.
 
 ### QA and PROD
 
@@ -222,12 +194,9 @@ Each environment's R2 token can reach only its own bucket. The deploy
 tokens are account-wide by necessity (Cloudflare can't scope a token to one
 Worker), so the wall between QA and PROD Workers is the `prod` GitHub
 environment: only jobs that target it, after your approval, get its token.
-`npm run dev` runs against QA.
-
-Code moves QA -> PROD like this: push to `master` -> Deploy ships it to QA
--> you check qa.xisle.net -> approve the waiting `prod` job in the Actions
-run -> the same commit ships to PROD. A newer push replaces an unapproved
-PROD deploy.
+Code moves DEV -> QA -> PROD like this: work locally with `go run ./dev`
+-> merge to `master` -> Deploy ships it to QA -> you check qa.xisle.net ->
+Actions -> Deploy -> Run workflow on `master` -> approve -> PROD.
 
 ### GitHub Actions
 
@@ -236,11 +205,13 @@ machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, deploy to QA, then to PROD after your approval |
-| `airspace.yml` | 1st of each month, or by hand | `etl airspace`, copies it into `server/public/data/`, opens a PR to review; merging deploys it |
-| `tiles.yml` | by hand: pick `qa` or `prod` (optional build date) | `etl tiles`, uploads the `.pmtiles` to that environment's bucket |
-| `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media into a private backup repo, committed only on change |
-| `seed-qa.yml` | by hand | replaces QA's data with the latest PROD backup |
+| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on any other branch -> QA | deploys the whole app from the repo: web app and server always; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites |
+| `update.yml` (**Update**) | 1st of each month, or by hand | regenerates airspace and bumps `etl/tiles-date.txt` to the newest Protomaps build, then opens one PR; merging it deploys both to QA |
+| `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media onto this repo's `backup` branch, committed only on change |
+| `restore-prod.yml` | by hand (type "restore prod"; needs your approval) | replaces PROD's data with the latest backup, or a chosen backup commit; saves PROD's current data as an artifact first |
+
+So a brand-new environment needs nothing but a Deploy: it fills in its own
+tiles and copies in PROD's sites from the latest backup.
 
 One-time setup is a single command, `setup/` (Go, stdlib plus
 `golang.org/x/crypto`), which builds both environments through the
@@ -251,14 +222,14 @@ Cloudflare and GitHub APIs:
   no R2), an R2 token on just its bucket, and a GitHub environment holding
   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`, `ADMIN_PASSWORD` and variable `R2_BUCKET`
-- Backups: the private backup repo (`xisle-dev/xsites-backup`), a
-  `prod-backup` environment with a read-only token on PROD's bucket
-  and the repo's write deploy key, a read-only key on the backup repo for
-  QA's seeding, and the `BACKUP_REPO` variable
+- Backups: a `prod-backup` environment with a read-only token on PROD's
+  bucket. The backup itself is committed to this repo's `backup` branch
+  (an orphan branch: no shared history with `master`, never deploys) with
+  the workflow's own `GITHUB_TOKEN`, so no extra keys or repos
 - "Allow GitHub Actions to create and approve pull requests"
 
 Every step is safe to re-run, and a re-run rotates every token value and
-deploy key and writes the new ones into GitHub -- that's also how you
+writes the new ones into GitHub -- that's also how you
 rotate credentials.
 
 It needs two credentials that no API can create for you:
@@ -283,13 +254,13 @@ go run . -deploy
 
 The account ID is the hex string in your dashboard URL
 (`dash.cloudflare.com/<account id>/...`). `-deploy` runs the Deploy
-workflow at the end. On first setup, also run Tiles for each environment,
-then Seed QA once the first backup exists. Admin passwords live in GitHub
-and every deploy pushes them to their Worker.
+workflow at the end, which also fills in tiles and sites. Admin passwords
+live in GitHub and every deploy pushes them to their Worker.
 
-To restore PROD's live data from a backup checkout (needs PROD's
-read/write R2 keys, not the backup's read-only ones):
-`rclone sync data r2:xsites-live-data --exclude "tiles/**"`.
+To restore PROD's site data, run **Restore PROD from backup**: leave
+`ref` blank for the latest backup, or give a commit SHA from the `backup`
+branch's history for an older one. It keeps PROD's pre-restore data as the
+run's `prod-before-restore` artifact for 30 days.
 
 ### sites.json
 
@@ -329,10 +300,8 @@ regardless of how the request-handling code is structured.
 
 `etl/` is a single Go program (`etl/main.go`, `etl/airspace.go`,
 `etl/tiles.go`) that builds this app's two regenerable, offline data
-artifacts. Both are dev-time-only -- nothing here runs in production, and
-neither is part of any automated build (airspace boundaries change on the
-order of months, basemap builds are refreshed by hand when wanted, not on
-every push). Raw downloads worth caching land in `etl/data-sources/`
+artifacts. Nothing here runs in production; the **Update** and **Deploy**
+workflows run it for QA and PROD, and you run `etl tiles` once for DEV. Raw downloads worth caching land in `etl/data-sources/`
 (gitignored); final artifacts land in `etl/output/` -- `airspace.geojson`
 is small and committed there directly, `labels-vancouver-island.pmtiles` is
 ~200MB and gitignored.
@@ -345,8 +314,8 @@ go build -o etl.exe .   # or just `go run .`
 **Airspace** (`./etl.exe airspace`): downloads OpenAIP's Canada-wide export,
 caches it at `etl/data-sources/openaip-ca-airspace.geojson`, trims it to the
 Vancouver Island flying area, and writes `etl/output/airspace.geojson`.
-Copy that into `server/public/data/airspace.geojson` and redeploy (see
-**Notes** below for why it's not read directly from `etl/output/`).
+The Update workflow copies it into `server/public/data/airspace.geojson`
+(see **Notes** below for why it's not read directly from `etl/output/`).
 
 **Tiles** (`./etl.exe tiles [YYYYMMDD]`): extracts the Vancouver Island bbox
 out of a [Protomaps daily basemap build](https://maps.protomaps.com/builds/)
@@ -355,7 +324,9 @@ into `etl/output/labels-vancouver-island.pmtiles`, using `go-pmtiles`'s own
 byte-range reads against the remote archive, nothing multi-GB downloaded
 locally. Defaults to today's date, walking backward up to 10 days if
 there's no build for it (Protomaps doesn't publish one every single day).
-After regenerating, re-upload it (see **Live editing** step 2).
+`etl/tiles-date.txt` pins the build QA and PROD use; Deploy rebuilds and
+uploads when it changes. `./etl.exe tiles-latest` prints the newest build
+date.
 
 ## Notes
 

@@ -9,6 +9,7 @@ etl/etl
 # and the raw cache are excluded.
 etl/data-sources/
 etl/output/*.pmtiles
+etl/output/*.date
 
 # Wrangler's local cache (account info, OAuth state) from running it in this
 # directory -- machine-local, not project state.
@@ -16,3 +17,6 @@ etl/output/*.pmtiles
 
 # Server dependencies -- reinstall with: cd server && npm install
 server/node_modules/
+
+# DEV server data (go run ./dev), seeded from the backup branch
+dev/data/

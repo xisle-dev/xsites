@@ -13,6 +13,7 @@
 //	etl tiles [YYYYMMDD]      extracts the VI bbox from a Protomaps basemap build
 //	                          (walks backward from today, or the given date, until
 //	                          a build is found)
+//	etl tiles-latest          prints the latest Protomaps build date (YYYYMMDD)
 //
 // Raw downloads that are worth caching land in data-sources/; final,
 // checked-in-or-uploaded artifacts land in output/. Tiles has no raw
@@ -34,12 +35,14 @@ func main() {
 		runAirspace()
 	case "tiles":
 		runTiles(os.Args[2:])
+	case "tiles-latest":
+		runTilesLatest()
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: etl <airspace|tiles> [args]")
+	fmt.Fprintln(os.Stderr, "usage: etl <airspace|tiles|tiles-latest> [args]")
 	os.Exit(1)
 }

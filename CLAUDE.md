@@ -6,18 +6,23 @@ X/Sites: a MapLibre GL map of Vancouver Island paragliding launch sites plus a C
 
 ## Commands
 
+DEV (`dev/`, Go, no Node needed):
+
+```bash
+go run ./dev        # http://localhost:8787, /admin/ needs no password; live-reloads server/public
+```
+
+Serves `server/public` directly, site data from `dev/data/` (gitignored, seeded from the `backup` branch on first run), tiles from `etl/output/*.pmtiles`. Its API (`dev/api.go`, `dev/siteyaml.go`) is a Go port of the Worker -- **change it in step with `server/src/` routes and `siteyaml.ts`**. The `xsite` entry in `.claude/launch.json` starts it for previews.
+
 Server (`server/`, Cloudflare Worker + static assets):
 
 ```bash
 cd server
 npm install
-npm run dev         # wrangler dev --remote --env qa, http://127.0.0.1:8787, QA buckets (needs `wrangler login`)
 npm run typecheck   # tsc --noEmit — the only check; there is no test suite or linter
-npx wrangler deploy # PROD; add --env qa for QA. Normally done by .github/workflows/deploy.yml, not by hand
-npx wrangler secret put ADMIN_PASSWORD
 ```
 
-`dev` runs against the **real** R2 buckets (`--remote`); there is no local-disk mode. The `xsite` entry in `.claude/launch.json` starts this for previews.
+Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on another branch -> QA. It also fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow refreshes airspace and `etl/tiles-date.txt` via a PR.
 
 ETL (`etl/`, Go, offline dev-time only):
 
@@ -25,6 +30,7 @@ ETL (`etl/`, Go, offline dev-time only):
 cd etl
 go run . airspace          # OpenAIP -> etl/output/airspace.geojson
 go run . tiles [YYYYMMDD]  # Protomaps extract -> etl/output/labels-vancouver-island.pmtiles (~200MB, gitignored)
+go run . tiles-latest      # newest Protomaps build date
 ```
 
 Setup (`setup/`, Go, run once per account or to rotate credentials):
@@ -54,8 +60,8 @@ Frontend has no bundler: `app.js` files are plain ES modules using MapLibre GL l
 ## Gotchas
 
 - Bump the `?v=<unix time>` query on `app.js`/`style.css` in both `index.html` files whenever those change, or browsers serve stale JS/CSS.
-- `server/public/data/airspace.geojson` is a tracked copy; after `etl airspace`, copy `etl/output/airspace.geojson` over it manually and redeploy.
-- The `.pmtiles` is uploaded per environment by the Tiles workflow; by hand it's `npx wrangler r2 object put <xsites-live-data|xsites-live-data-qa>/tiles/labels-vancouver-island.pmtiles --file=... --remote` (`--remote` is required or it writes to local simulated storage).
+- `server/public/data/airspace.geojson` is a tracked copy; the Update workflow refreshes it (by hand: `etl airspace`, then copy `etl/output/airspace.geojson` over it).
+- The `.pmtiles` reaches QA/PROD R2 only through Deploy, which rebuilds it when `etl/tiles-date.txt` is newer than the bucket's `tiles/labels-vancouver-island.date`.
 - Site markers: name labels are a second, independent MapLibre `Marker` anchored to the pin's coordinate, deliberately not a child of the pin element.
 - The site list is fetched before constructing the `Map` and rendered without waiting for the `load` event, so a slow basemap doesn't leave the sidebar empty.
 

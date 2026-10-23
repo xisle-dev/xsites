@@ -1,80 +1,142 @@
-# Deploys the Worker (server/src) and its static files (server/public,
-# including data/airspace.geojson): first to QA (xsites-editor-qa,
-# qa.xisle.net), then the same commit to PROD (xsites-editor, xisle.net)
-# once you approve it -- the "prod" GitHub environment requires a reviewer.
-# A newer push replaces a PROD deploy still waiting for approval.
+# Deploys the whole app from this repo to QA or PROD, filling in any data
+# the environment is missing. Every run:
 #
-# Each job reads only its own environment's secrets (written by
-# `go run ./setup`): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and
-# ADMIN_PASSWORD, which every deploy pushes to that Worker as its secret.
+#  1. Web app and server: always deployed (server/src + server/public,
+#     which includes data/airspace.geojson).
+#  2. Tiles: built (etl tiles) and uploaded only when the bucket has none,
+#     or they're from an older Protomaps build than etl/tiles-date.txt
+#     (which the Update workflow bumps).
+#  3. Sites YAML and media: copied from the "backup" branch only when the
+#     bucket has no sites at all, so a fresh environment starts with PROD's
+#     data. Live data is never overwritten.
+#
+# Where it goes:
+#  - merge (push) to master          -> QA
+#  - Run workflow on master          -> PROD (waits for your approval)
+#  - Run workflow on any other branch -> QA
+#
+# Uses the target environment's secrets and R2_BUCKET variable, written by
+# `go run ./setup`.
 name: Deploy
 
 on:
   push:
     branches: [master]
-    paths: ["server/**", ".github/workflows/deploy.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  qa:
+  deploy:
     runs-on: ubuntu-latest
     environment:
-      name: qa
-      url: https://qa.xisle.net
+      name: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'prod' || 'qa' }}
+      url: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'https://xisle.net' || 'https://qa.xisle.net' }}
     concurrency:
-      group: deploy-qa
+      group: deploy-${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'prod' || 'qa' }}
       cancel-in-progress: false
-    defaults:
-      run:
-        working-directory: server
+    env:
+      TARGET: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'prod' || 'qa' }}
+      SITE_URL: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'https://xisle.net' || 'https://qa.xisle.net' }}
+      BUCKET: ${{ vars.R2_BUCKET }}
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      TILES_KEY: tiles/labels-vancouver-island.pmtiles
+      TILES_DATE_KEY: tiles/labels-vancouver-island.date
     steps:
       - uses: actions/checkout@v4
+
+      # --- 1. Web app and server ---
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: server/package-lock.json
       - run: npm ci
+        working-directory: server
       - run: npm run typecheck
+        working-directory: server
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: server
-          environment: qa
+          environment: ${{ env.TARGET == 'qa' && 'qa' || '' }}
           command: deploy
           secrets: |
             ADMIN_PASSWORD
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
 
-  prod:
-    needs: qa
-    runs-on: ubuntu-latest
-    environment:
-      name: prod
-      url: https://xisle.net
-    concurrency:
-      group: deploy-prod
-      cancel-in-progress: true
-    defaults:
-      run:
-        working-directory: server
-    steps:
+      # --- 2. Tiles, if missing or out of date ---
+      - name: Install rclone
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+      - name: Check tiles
+        id: tiles
+        run: |
+          want=$(tr -d '[:space:]' < etl/tiles-date.txt)
+          have=$(rclone cat "r2:$BUCKET/$TILES_DATE_KEY" 2>/dev/null | tr -d '[:space:]' || true)
+          echo "tiles: pinned $want, bucket has ${have:-none}"
+          echo "date=$want" >> "$GITHUB_OUTPUT"
+          if [ -n "$have" ] && [ "$have" -ge "$want" ] && rclone lsf "r2:$BUCKET/$TILES_KEY" | grep -q .; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.tiles.outputs.build == 'true'
+        with:
+          go-version-file: etl/go.mod
+          cache-dependency-path: etl/go.sum
+      # Protomaps only keeps recent builds, so if the pinned one is gone the
+      # latest is used instead; the date actually built is what's recorded.
+      - name: Build and upload tiles
+        if: steps.tiles.outputs.build == 'true'
+        run: |
+          (cd etl && { go run . tiles "${{ steps.tiles.outputs.date }}" || go run . tiles; })
+          size=$(stat -c %s etl/output/labels-vancouver-island.pmtiles)
+          echo "pmtiles: $size bytes"
+          if [ "$size" -lt 20000000 ]; then
+            echo "::error::pmtiles is only $size bytes; expected ~200 MB"
+            exit 1
+          fi
+          rclone copyto etl/output/labels-vancouver-island.pmtiles "r2:$BUCKET/$TILES_KEY" \
+            --s3-no-check-bucket --header-upload "Content-Type: application/octet-stream" -v
+          rclone copyto etl/output/labels-vancouver-island.date "r2:$BUCKET/$TILES_DATE_KEY" --s3-no-check-bucket
+
+      # --- 3. Sites, only into an empty bucket ---
+      - name: Check sites
+        id: sites
+        run: |
+          n=$(rclone lsf "r2:$BUCKET/sites" --include "*.yaml" --max-depth 1 2>/dev/null | wc -l)
+          echo "sites in bucket: $n"
+          if [ "$n" -gt 0 ]; then
+            echo "seed=false" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin backup >/dev/null; then
+            echo "seed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::bucket has no sites and there is no backup branch yet; starting empty"
+            echo "seed=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+        if: steps.sites.outputs.seed == 'true'
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-      - run: npm ci
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: server
-          command: deploy
-          secrets: |
-            ADMIN_PASSWORD
-        env:
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          ref: backup
+          path: backup
+      - name: Copy sites from the backup branch
+        if: steps.sites.outputs.seed == 'true'
+        run: |
+          git -C backup log -1 --format='Seeding from backup %h (%cd)'
+          rclone copy backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" -v
+          rclone deletefile "r2:$BUCKET/sites.json" || true
+
+      # sites.json is derived and rebuilt on request if missing; ask for it so
+      # a broken deploy fails here rather than for the first visitor.
+      - name: Smoke test
+        run: |
+          curl -fsS "$SITE_URL/sites.json" -o sites.json
+          echo "sites live on $TARGET: $(grep -o '"id":' sites.json | wc -l)"

@@ -1,20 +1,24 @@
 # Nightly backup of PROD's site data (R2 xsites-live-data: every
-# sites/<id>.yaml and its media) into a separate PRIVATE repo, committed
-# only when something changed -- so git history there is a dated record of
-# every edit. The derived sites.json and the regenerable ~200 MB tiles/ are
-# left out. Restore with:
-#   rclone sync <backup checkout>/data r2:xsites-live-data --exclude "tiles/**"
+# sites/<id>.yaml and its media) onto this repo's "backup" branch, committed
+# only when something changed -- so that branch's history is a dated record
+# of every edit. The branch is an orphan: it shares no history with master
+# and never triggers a deploy. The derived sites.json and the regenerable
+# ~200 MB tiles/ are left out. Restore with the Restore PROD workflow.
 #
 # PROD only. Runs in the "prod-backup" environment (no approval needed),
-# whose secrets -- a read-only R2 token on PROD's bucket and the backup
-# repo's deploy key -- are written by `go run ./setup`, as is the BACKUP_REPO
-# variable.
+# whose only secrets -- a read-only R2 token on PROD's bucket -- are written
+# by `go run ./setup`. Pushing uses the workflow's own GITHUB_TOKEN.
 name: Backup
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "30 10 * * *" # daily, ~3:30am Pacific
+
+permissions:
+  contents: write
+
+concurrency: backup
 
 jobs:
   backup:
@@ -29,9 +33,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ vars.BACKUP_REPO }}
-          ssh-key: ${{ secrets.BACKUP_DEPLOY_KEY }}
           path: backup
+      # The first run creates the branch; after that, build on its tip.
+      - name: Switch to the backup branch
+        working-directory: backup
+        run: |
+          if git ls-remote --exit-code --heads origin backup >/dev/null; then
+            git fetch --depth=1 origin backup
+            git checkout -B backup FETCH_HEAD
+          else
+            git checkout --orphan backup
+            git rm -rqf .
+          fi
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
       - name: Copy live data from R2
@@ -47,4 +60,4 @@ jobs:
           git config user.name "xsites backup"
           git config user.email "actions@users.noreply.github.com"
           git commit -m "Backup $(date -u +%Y-%m-%d)"
-          git push
+          git push origin backup
