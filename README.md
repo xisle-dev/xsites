@@ -205,7 +205,7 @@ machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on any other branch -> QA | deploys the whole app from the repo: web app and server always; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites |
+| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on any other branch -> QA | deploys the whole app from the repo: web app and server always; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites; tags the commit `qa-`/`prod-YYYYMMDD-HHMMSS` on success |
 | `update.yml` (**Update**) | 1st of each month, or by hand | regenerates airspace and bumps `etl/tiles-date.txt` to the newest Protomaps build, then opens one PR; merging it deploys both to QA |
 | `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media onto this repo's `backup` branch, committed only on change |
 | `restore-prod.yml` | by hand (type "restore prod"; needs your approval) | replaces PROD's data with the latest backup, or a chosen backup commit; saves PROD's current data as an artifact first |
