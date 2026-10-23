@@ -47,6 +47,18 @@ jobs:
           fi
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
+      # An empty bucket means PROD was wiped or is being rebuilt, not that
+      # every site was deleted. Backing it up would make the newest snapshot
+      # empty, and Deploy seeds a fresh bucket from that snapshot -- so stop
+      # and keep the last good backup instead.
+      - name: Refuse to back up an empty bucket
+        run: |
+          n=$(rclone lsf r2:xsites-live-data/sites --include "*.yaml" --max-depth 1 | wc -l)
+          echo "sites in PROD: $n"
+          if [ "$n" -eq 0 ]; then
+            echo "::error::PROD's bucket has no sites; not overwriting the last backup"
+            exit 1
+          fi
       - name: Copy live data from R2
         run: rclone sync r2:xsites-live-data backup/data --exclude "tiles/**" --exclude "/sites.json" -v
       - name: Commit if changed
