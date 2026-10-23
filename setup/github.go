@@ -182,13 +182,29 @@ func (g *github) replaceDeployKey(repo, title, pub string, readOnly bool) error 
 }
 
 // allowActionsPRs turns on "Allow GitHub Actions to create and approve pull
-// requests", which the Airspace workflow needs. An org-level policy can
-// still override this for org-owned repos.
+// requests", which the Airspace workflow needs. For an org-owned repo the
+// org's own setting has to allow it first, so when the repo-level call is
+// refused for that reason (409) it's turned on at the org level too -- that
+// needs the admin:org scope, which `gh auth login` doesn't grant by default.
 func (g *github) allowActionsPRs(repo string) error {
-	_, err := g.do("PUT", "/repos/"+repo+"/actions/permissions/workflow", map[string]any{
+	body := map[string]any{
 		"default_workflow_permissions":     "read",
 		"can_approve_pull_request_reviews": true,
-	}, nil)
+	}
+	status, err := g.do("PUT", "/repos/"+repo+"/actions/permissions/workflow", body, nil)
+	if status != http.StatusConflict {
+		return err
+	}
+	org, _, _ := strings.Cut(repo, "/")
+	status, err = g.do("PUT", "/orgs/"+org+"/actions/permissions/workflow", body, nil)
+	if status == http.StatusForbidden || status == http.StatusNotFound {
+		return fmt.Errorf("the %s org blocks Actions from opening pull requests, and this GitHub token can't change org settings; "+
+			"run `gh auth refresh -h github.com -s admin:org` and re-run setup, or enable it under the org's Settings > Actions > General", org)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = g.do("PUT", "/repos/"+repo+"/actions/permissions/workflow", body, nil)
 	return err
 }
 
