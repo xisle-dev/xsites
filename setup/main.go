@@ -93,8 +93,13 @@ func main() {
 	}
 	s.backups()
 
+	// Only the Airspace workflow's PRs depend on this, so a refusal is a
+	// warning rather than a reason to stop before deploying.
 	step("Allowing GitHub Actions to open pull requests")
-	check(s.gh.allowActionsPRs(s.repo))
+	if err := s.gh.allowActionsPRs(s.repo); err != nil {
+		fmt.Println("    WARNING: " + err.Error())
+		fmt.Println("    Everything else is set up; only the Airspace workflow's pull requests need this.")
+	}
 
 	if *deploy {
 		step("Running the Deploy workflow")
