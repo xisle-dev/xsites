@@ -23,12 +23,19 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 )
 
 func main() {
 	if len(os.Args) < 2 {
 		usage()
+	}
+	// Every path below is relative to etl/, so output always lands in
+	// etl/output whichever folder of the repo this is started from.
+	if err := chdirToETL(); err != nil {
+		log.Fatal(err)
 	}
 	switch os.Args[1] {
 	case "airspace":
@@ -39,6 +46,29 @@ func main() {
 		runTilesLatest()
 	default:
 		usage()
+	}
+}
+
+// chdirToETL walks up from the current folder to the repo root and moves
+// into its etl/ folder.
+func chdirToETL() error {
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	for {
+		etl := filepath.Join(dir, "etl")
+		if _, err := os.Stat(filepath.Join(etl, "go.mod")); err == nil {
+			return os.Chdir(etl)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && filepath.Base(dir) == "etl" {
+			return os.Chdir(dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return fmt.Errorf("run this from inside the xsites repo")
+		}
+		dir = parent
 	}
 }
 
