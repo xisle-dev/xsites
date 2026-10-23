@@ -133,7 +133,7 @@ local disk, no repo-checked-in copy, and no S3-style credentials involved.
 
 | | DEV | QA | PROD |
 | --- | --- | --- | --- |
-| Runs | your PC, `go run ./dev` | Cloudflare Worker `xsites-editor-qa` | Cloudflare Worker `xsites-editor` |
+| Runs | your PC, `go run ./dev` | Cloudflare Worker `xsites-qa` | Cloudflare Worker `xsites-prod` |
 | URL | <http://localhost:8787> | <https://qa.xisle.net> | <https://xisle.net> |
 | Site data | `dev/data/` (local files) | R2 `xsites-qa` | R2 `xsites-prod` |
 | Gets code by | live from the repo | **Deploy**: every merge to `master`, or Run workflow on any other branch | **Deploy**: Run workflow on `master`, after your approval |
@@ -184,7 +184,7 @@ only the code. Everything else is separate:
 | | QA | PROD |
 | --- | --- | --- |
 | URL | <https://qa.xisle.net> | <https://xisle.net> |
-| Worker | `xsites-editor-qa` (`wrangler deploy --env qa`) | `xsites-editor` |
+| Worker | `xsites-qa` (`wrangler deploy --env qa`) | `xsites-prod` |
 | R2 bucket | `xsites-qa` | `xsites-prod` |
 | Admin password | its own | its own |
 | GitHub environment | `qa` | `prod` (deploys need your approval) |
