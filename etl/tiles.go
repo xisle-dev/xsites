@@ -88,7 +88,8 @@ func runTiles(args []string) {
 	if err := os.WriteFile(filepath.Join("output", "labels-vancouver-island.date"), []byte(date.Format("20060102")+"\n"), 0644); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %s", outPath)
+	abs, _ := filepath.Abs(outPath)
+	log.Printf("wrote %s", abs)
 }
 
 // runTilesLatest prints the date of the newest Protomaps build, which the

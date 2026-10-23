@@ -273,5 +273,6 @@ func runAirspace() {
 	if err := os.WriteFile(outPath, outJSON, 0644); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %s (%d bytes)", outPath, len(outJSON))
+	abs, _ := filepath.Abs(outPath)
+	log.Printf("wrote %s (%d bytes)", abs, len(outJSON))
 }
