@@ -6,7 +6,7 @@
 # Before overwriting anything it saves PROD's current data as a workflow
 # artifact ("prod-before-restore", kept 30 days), so a restore can itself be
 # undone by downloading that and syncing it back.
-name: Restore PROD from backup
+name: 4. Restore PROD from backup
 
 on:
   workflow_dispatch:

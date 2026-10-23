@@ -17,7 +17,7 @@
 #
 # Uses the target environment's secrets and R2_BUCKET variable, written by
 # `go run ./setup`.
-name: Deploy
+name: 1. Deploy
 
 on:
   push:

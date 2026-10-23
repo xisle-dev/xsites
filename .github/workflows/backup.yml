@@ -8,7 +8,7 @@
 # PROD only. Runs in the "prod-backup" environment (no approval needed),
 # whose only secrets -- a read-only R2 token on PROD's bucket -- are written
 # by `go run ./setup`. Pushing uses the workflow's own GITHUB_TOKEN.
-name: Backup
+name: 3. Backup
 
 on:
   workflow_dispatch:

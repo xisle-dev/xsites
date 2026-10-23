@@ -8,7 +8,7 @@
 #
 # No secrets needed. Requires Settings > Actions > General > "Allow GitHub
 # Actions to create and approve pull requests" (setup turns it on).
-name: Update
+name: 2. Update
 
 on:
   workflow_dispatch:
