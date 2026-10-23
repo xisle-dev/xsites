@@ -10,8 +10,7 @@ compatibility_date = "2026-09-01"
 pattern = "xisle.net"
 custom_domain = true
 
-# Editor frontend (index.html, app.js, style.css, logo/favicon.svg,
-# data/airspace.geojson) -- copies of the same files server/main.go used to
+# Editor frontend (index.html, app.js, style.css, logo/favicon.svg) -- copies of the same files server/main.go used to
 # serve via http.FileServer(http.Dir(root)) -- see github issue #16. Assets
 # are matched first; anything that doesn't match a file here (/api/*,
 # /media/*) falls through to the Worker script below.
@@ -24,7 +23,8 @@ run_worker_first = ["/admin", "/admin/*", "/api/*"]
 
 # DATA: the environment's one R2 bucket -- per-site YAML and media under
 # sites/ (the source of truth the editor reads and writes), the derived
-# sites.json the list views read, and the label tiles under tiles/.
+# sites.json the list views read, airspace.geojson and the label tiles under
+# tiles/ (both uploaded by Deploy).
 [[r2_buckets]]
 binding = "DATA"
 bucket_name = "xsites-prod"

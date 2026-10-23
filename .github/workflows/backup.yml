@@ -60,7 +60,7 @@ jobs:
             exit 1
           fi
       - name: Copy live data from R2
-        run: rclone sync r2:xsites-prod backup/data --exclude "tiles/**" --exclude "/sites.json" -v
+        run: rclone sync r2:xsites-prod backup/data --exclude "tiles/**" --exclude "/sites.json" --exclude "/airspace.geojson" -v
       - name: Commit if changed
         working-directory: backup
         run: |

@@ -27,8 +27,8 @@ import { publishAllSites, publishSiteChange, publishSiteRemoval, readPublishedSi
 import { R2ObjectStore, type ObjectStore } from "./objectstore";
 
 // The raw shape Cloudflare hands fetch(). DATA is the environment's one R2
-// bucket: per-site YAML and media under sites/, the derived sites.json, and
-// the label tiles under tiles/. Nothing past fetch() itself should
+// bucket: per-site YAML and media under sites/, the derived sites.json,
+// airspace.geojson, and the label tiles under tiles/. Nothing past fetch() itself should
 // reference this type.
 export interface CloudflareEnv {
   DATA: R2Bucket;
@@ -281,6 +281,19 @@ async function handleGetMedia(ctx: Ctx, id: string, filename: string): Promise<R
   }
 }
 
+// The airspace overlay is data like the tiles: Deploy uploads a fresh
+// `etl airspace` to the bucket root on every run, rather than it shipping
+// as a static asset.
+const AIRSPACE_KEY = "airspace.geojson";
+
+async function handleGetAirspace(ctx: Ctx): Promise<Response> {
+  const obj = await ctx.store.get(AIRSPACE_KEY);
+  if (!obj) return new Response("Not found", { status: 404 });
+  return new Response(obj.data, {
+    headers: { "Content-Type": "application/geo+json", "Cache-Control": "public, max-age=3600" },
+  });
+}
+
 // SHA-256 both sides first so the comparison is constant-length and the
 // timing doesn't leak how much of the password matched.
 async function digest(text: string): Promise<Uint8Array> {
@@ -355,6 +368,8 @@ async function dispatch(ctx: Ctx, env: CloudflareEnv, request: Request): Promise
     return await env.ASSETS.fetch(request);
   } else if (segments[0] === "media" && segments.length === 3 && method === "GET") {
     return await handleGetMedia(ctx, segments[1], segments[2]);
+  } else if (segments.length === 2 && segments[0] === "data" && segments[1] === AIRSPACE_KEY && method === "GET") {
+    return await handleGetAirspace(ctx);
   } else if (segments[0] === "tiles" && method === "GET") {
     const tileResponse = await handleTileRequest(request, ctx.store);
     if (tileResponse) return tileResponse;

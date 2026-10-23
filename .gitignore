@@ -2,14 +2,11 @@
 etl/etl.exe
 etl/etl
 
-# etl's raw-download cache and regenerable large output (the PMTiles
-# archive, ~200MB, over GitHub's file size limit anyway). Regenerate with
-# `etl airspace` / `etl tiles` -- see README.md. output/airspace.geojson
-# itself IS committed (small, human-reviewable) -- only the pmtiles archive
-# and the raw cache are excluded.
+# etl's raw-download cache and its outputs (airspace.geojson and the ~200MB
+# PMTiles archive). Regenerate with `etl airspace` / `etl tiles` -- see
+# README.md. DEV reads them from etl/output; Deploy builds its own for R2.
 etl/data-sources/
-etl/output/*.pmtiles
-etl/output/*.date
+etl/output/
 
 # Wrangler's local cache (account info, OAuth state) from running it in this
 # directory -- machine-local, not project state.
