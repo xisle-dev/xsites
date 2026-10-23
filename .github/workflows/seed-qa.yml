@@ -1,10 +1,11 @@
-# Replaces QA's data with a copy of PROD's from the latest nightly backup,
-# so QA can be tested against real sites. QA never touches PROD: it reads
-# the backup repo through a read-only deploy key and writes only to its own
-# buckets. Run by hand whenever QA should be reset.
+# Replaces QA's site data with a copy of PROD's from the latest nightly
+# backup, so QA can be tested against real sites. QA never touches PROD: it
+# reads the backup repo through a read-only deploy key and writes only to
+# its own bucket. QA's tiles are left alone. Run by hand whenever QA should
+# be reset.
 #
-# Uses the "qa" environment's secrets and R2_LIVE_BUCKET / R2_PUBLIC_BUCKET
-# variables plus BACKUP_READ_KEY, all written by `go run ./setup`.
+# Uses the "qa" environment's secrets and R2_BUCKET variable plus
+# BACKUP_READ_KEY, all written by `go run ./setup`.
 name: Seed QA from PROD backup
 
 on:
@@ -16,8 +17,7 @@ jobs:
     environment: qa
     env:
       QA_URL: https://qa.xisle.net
-      LIVE: ${{ vars.R2_LIVE_BUCKET }}
-      PUBLIC: ${{ vars.R2_PUBLIC_BUCKET }}
+      BUCKET: ${{ vars.R2_BUCKET }}
       RCLONE_CONFIG_R2_TYPE: s3
       RCLONE_CONFIG_R2_PROVIDER: Cloudflare
       RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -25,11 +25,10 @@ jobs:
       RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
     steps:
       # Belt and braces on top of the bucket-scoped token: refuse to write
-      # anywhere that isn't obviously a QA bucket.
-      - name: Check targets are QA buckets
+      # anywhere that isn't obviously QA's bucket.
+      - name: Check the target is a QA bucket
         run: |
-          case "$LIVE" in *-qa) ;; *) echo "::error::R2_LIVE_BUCKET=$LIVE is not a QA bucket"; exit 1;; esac
-          case "$PUBLIC" in *-qa) ;; *) echo "::error::R2_PUBLIC_BUCKET=$PUBLIC is not a QA bucket"; exit 1;; esac
+          case "$BUCKET" in *-qa) ;; *) echo "::error::R2_BUCKET=$BUCKET is not a QA bucket"; exit 1;; esac
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.BACKUP_REPO }}
@@ -37,24 +36,14 @@ jobs:
           path: backup
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
-      - name: Copy site records and media into QA's live bucket
-        run: rclone sync backup/data "r2:$LIVE" -v
-      # The public bucket keeps media at media/<id>/<file> rather than
-      # sites/<id>/media/<file> -- same as publish.ts's mirror.
-      - name: Mirror media into QA's public bucket
-        run: |
-          rclone purge "r2:$PUBLIC/media" || true
-          for dir in backup/data/sites/*/media; do
-            [ -d "$dir" ] || continue
-            id=$(basename "$(dirname "$dir")")
-            rclone copy "$dir" "r2:$PUBLIC/media/$id" -v
-          done
-      # With sites.json gone, /api/sites falls back to aggregating the live
-      # YAML -- the exact JSON publish.ts would write -- so store that.
+      # sync deletes QA sites that aren't in the backup; excluded paths
+      # (tiles, sites.json) are neither copied nor deleted.
+      - name: Copy site records and media into QA's bucket
+        run: rclone sync backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" -v
+      # sites.json is derived; with it gone, the next list request rebuilds it
+      # from the YAML just copied. Request it now so that happens here.
       - name: Rebuild sites.json
         run: |
-          rclone deletefile "r2:$PUBLIC/sites.json" || true
-          curl -fsS "$QA_URL/api/sites" -o sites.json
+          rclone deletefile "r2:$BUCKET/sites.json" || true
+          curl -fsS "$QA_URL/sites.json" -o sites.json
           echo "sites in QA: $(grep -o '"id":' sites.json | wc -l)"
-          rclone copyto sites.json "r2:$PUBLIC/sites.json" \
-            --header-upload "Content-Type: application/json; charset=utf-8" -v

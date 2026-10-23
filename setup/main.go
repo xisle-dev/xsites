@@ -11,19 +11,18 @@
 // ADMIN_PASSWORD_QA and ADMIN_PASSWORD_PROD.
 //
 // QA and PROD share the account and the code, nothing else: each has its
-// own Worker (see server/wrangler.toml), R2 buckets, admin password,
+// own Worker (see server/wrangler.toml), R2 bucket, admin password,
 // Cloudflare tokens and GitHub environment. Per environment, in order:
 //
-//  1. R2 buckets, created by a temporary token deleted straight after
+//  1. The R2 bucket, created by a temporary token deleted straight after
 //  2. Token "xsites-deploy-<env>": Workers scripts, routes, DNS -- no R2
-//  3. Token "xsites-r2-<env>": object read/write on that env's buckets only
+//  3. Token "xsites-r2-<env>": object read/write on that env's bucket only
 //  4. GitHub environment <env> (PROD requires your approval to deploy) with
 //     secrets CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID,
-//     R2_SECRET_ACCESS_KEY, ADMIN_PASSWORD and variables R2_LIVE_BUCKET,
-//     R2_PUBLIC_BUCKET
+//     R2_SECRET_ACCESS_KEY, ADMIN_PASSWORD and variable R2_BUCKET
 //
 // Then, for backups: a private backup repo, GitHub environment
-// "prod-backup" holding a read-only token on PROD's live bucket and the
+// "prod-backup" holding a read-only token on PROD's bucket and the
 // repo's write deploy key, and a read-only key on the backup repo for QA so
 // it can be seeded from PROD's backup without any access to PROD itself.
 //
@@ -53,19 +52,18 @@ import (
 )
 
 type environment struct {
-	name         string // GitHub environment and token suffix
-	liveBucket   string // must match server/wrangler.toml
-	publicBucket string
-	passwordEnv  string
-	approval     bool // deploys wait for the repo owner's approval
+	name        string // GitHub environment and token suffix
+	bucket      string // must match server/wrangler.toml
+	passwordEnv string
+	approval    bool // deploys wait for the repo owner's approval
 }
 
 var environments = []environment{
-	{name: "qa", liveBucket: "xsites-live-data-qa", publicBucket: "xsites-qa", passwordEnv: "ADMIN_PASSWORD_QA"},
-	{name: "prod", liveBucket: "xsites-live-data", publicBucket: "xsites", passwordEnv: "ADMIN_PASSWORD_PROD", approval: true},
+	{name: "qa", bucket: "xsites-live-data-qa", passwordEnv: "ADMIN_PASSWORD_QA"},
+	{name: "prod", bucket: "xsites-live-data", passwordEnv: "ADMIN_PASSWORD_PROD", approval: true},
 }
 
-const prodLiveBucket = "xsites-live-data"
+const prodBucket = "xsites-live-data"
 
 func main() {
 	repo := flag.String("repo", "xisle-dev/xsites", "GitHub repo that deploys the site")
@@ -132,7 +130,7 @@ func (s *setup) environment(env environment) {
 	}
 	check(s.gh.ensureEnvironment(s.repo, env.name, reviewer))
 
-	s.buckets(env.name, env.liveBucket, env.publicBucket)
+	s.createBucket(env.name, env.bucket)
 
 	step(fmt.Sprintf("[%s] Cloudflare token xsites-deploy-%s", env.name, env.name))
 	accountRefs, err := s.catalog.lookup(scopeAccount, "Workers Scripts Write", "Account Settings Read", "Workers Tail Read")
@@ -146,15 +144,14 @@ func (s *setup) environment(env environment) {
 	check(err)
 
 	step(fmt.Sprintf("[%s] Cloudflare token xsites-r2-%s", env.name, env.name))
-	keyID, secret := s.r2Token("xsites-r2-"+env.name, "Workers R2 Storage Bucket Item Write", env.liveBucket, env.publicBucket)
+	keyID, secret := s.r2Token("xsites-r2-"+env.name, "Workers R2 Storage Bucket Item Write", env.bucket)
 
 	step(fmt.Sprintf("[%s] GitHub secrets and variables", env.name))
 	check(s.gh.setSecret(scope, "CLOUDFLARE_API_TOKEN", deployTok.Value))
 	check(s.gh.setSecret(scope, "CLOUDFLARE_ACCOUNT_ID", s.account))
 	check(s.gh.setSecret(scope, "R2_ACCESS_KEY_ID", keyID))
 	check(s.gh.setSecret(scope, "R2_SECRET_ACCESS_KEY", secret))
-	check(s.gh.setVariable(scope, "R2_LIVE_BUCKET", env.liveBucket))
-	check(s.gh.setVariable(scope, "R2_PUBLIC_BUCKET", env.publicBucket))
+	check(s.gh.setVariable(scope, "R2_BUCKET", env.bucket))
 	if pw := os.Getenv(env.passwordEnv); pw != "" {
 		check(s.gh.setSecret(scope, "ADMIN_PASSWORD", pw))
 	} else if ok, err := s.gh.secretExists(scope, "ADMIN_PASSWORD"); err != nil {
@@ -166,10 +163,10 @@ func (s *setup) environment(env environment) {
 	}
 }
 
-// buckets creates the environment's R2 buckets with a short-lived token
+// createBucket creates the environment's R2 bucket with a short-lived token
 // that has account-wide R2 rights, deleted as soon as it's done, so no
-// long-lived credential can reach another environment's buckets.
-func (s *setup) buckets(env string, names ...string) {
+// long-lived credential can reach another environment's bucket.
+func (s *setup) createBucket(env, name string) {
 	refs, err := s.catalog.lookup(scopeAccount, "Workers R2 Storage Write")
 	check(err)
 	tmp, err := s.cf.ensureToken("xsites-setup-"+env, []tokenPolicy{
@@ -178,12 +175,10 @@ func (s *setup) buckets(env string, names ...string) {
 	check(err)
 	defer func() { check(s.cf.deleteToken(tmp.ID)) }()
 	creator := &cloudflare{token: tmp.Value, account: s.account}
-	for _, b := range names {
-		step(fmt.Sprintf("[%s] R2 bucket %s", env, b))
-		created, err := creator.ensureBucket(b)
-		check(err)
-		done(created, "created", "already exists")
-	}
+	step(fmt.Sprintf("[%s] R2 bucket %s", env, name))
+	created, err := creator.ensureBucket(name)
+	check(err)
+	done(created, "created", "already exists")
 }
 
 // r2Token ensures a token with one bucket-level permission on the given
@@ -207,8 +202,8 @@ func (s *setup) backups() {
 	step("[backup] GitHub environment prod-backup")
 	check(s.gh.ensureEnvironment(s.repo, "prod-backup", 0))
 
-	step("[backup] Cloudflare token xsites-backup-read (read-only, PROD live data)")
-	keyID, secret := s.r2Token("xsites-backup-read", "Workers R2 Storage Bucket Item Read", prodLiveBucket)
+	step("[backup] Cloudflare token xsites-backup-read (read-only, PROD bucket)")
+	keyID, secret := s.r2Token("xsites-backup-read", "Workers R2 Storage Bucket Item Read", prodBucket)
 	check(s.gh.setSecret(scope, "CLOUDFLARE_ACCOUNT_ID", s.account))
 	check(s.gh.setSecret(scope, "R2_ACCESS_KEY_ID", keyID))
 	check(s.gh.setSecret(scope, "R2_SECRET_ACCESS_KEY", secret))

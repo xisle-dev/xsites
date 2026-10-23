@@ -1,10 +1,12 @@
-# Nightly backup of the live site data (R2 xsites-live-data: every
+# Nightly backup of PROD's site data (R2 xsites-live-data: every
 # sites/<id>.yaml and its media) into a separate PRIVATE repo, committed
 # only when something changed -- so git history there is a dated record of
-# every edit. Restore with: rclone sync <backup checkout>/data r2:xsites-live-data
+# every edit. The derived sites.json and the regenerable ~200 MB tiles/ are
+# left out. Restore with:
+#   rclone sync <backup checkout>/data r2:xsites-live-data --exclude "tiles/**"
 #
 # PROD only. Runs in the "prod-backup" environment (no approval needed),
-# whose secrets -- a read-only R2 token on xsites-live-data and the backup
+# whose secrets -- a read-only R2 token on PROD's bucket and the backup
 # repo's deploy key -- are written by `go run ./setup`, as is the BACKUP_REPO
 # variable.
 name: Backup
@@ -33,7 +35,7 @@ jobs:
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
       - name: Copy live data from R2
-        run: rclone sync r2:xsites-live-data backup/data -v
+        run: rclone sync r2:xsites-live-data backup/data --exclude "tiles/**" --exclude "/sites.json" -v
       - name: Commit if changed
         working-directory: backup
         run: |

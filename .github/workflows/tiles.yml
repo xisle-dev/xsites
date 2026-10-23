@@ -1,11 +1,11 @@
 # Rebuilds the Vancouver Island label tiles from a Protomaps daily build and
-# uploads them to the chosen environment's public bucket
+# uploads them to the chosen environment's bucket
 # (tiles/labels-vancouver-island.pmtiles). The ~200 MB archive never
 # touches git. Run by hand when you want fresher labels -- QA first, then
 # PROD (which waits for your approval); the Worker picks up the new file
 # immediately, no deploy needed.
 #
-# Uses the target environment's secrets and R2_PUBLIC_BUCKET variable,
+# Uses the target environment's secrets and R2_BUCKET variable,
 # written by `go run ./setup`.
 name: Tiles
 
@@ -56,5 +56,5 @@ jobs:
       - name: Upload to R2
         run: |
           rclone copyto etl/output/labels-vancouver-island.pmtiles \
-            "r2:${{ vars.R2_PUBLIC_BUCKET }}/tiles/labels-vancouver-island.pmtiles" \
+            "r2:${{ vars.R2_BUCKET }}/tiles/labels-vancouver-island.pmtiles" \
             --s3-no-check-bucket --header-upload "Content-Type: application/octet-stream" -v

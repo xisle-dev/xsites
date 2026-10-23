@@ -22,32 +22,20 @@ binding = "ASSETS"
 # (secret ADMIN_PASSWORD: `npx wrangler secret put ADMIN_PASSWORD`).
 run_worker_first = ["/admin", "/admin/*", "/api/*"]
 
-# LIVE_DATA: the live-editable source of truth (per-site YAML objects +
-# media), read/written by every /api/sites request -- see github issue #11
-# (the Workers-port roadmap) for how this replaces server/store.go's
-# r2SiteStore.
+# DATA: the environment's one R2 bucket -- per-site YAML and media under
+# sites/ (the source of truth the editor reads and writes), the derived
+# sites.json the list views read, and the label tiles under tiles/.
 [[r2_buckets]]
-binding = "LIVE_DATA"
+binding = "DATA"
 bucket_name = "xsites-live-data"
 
-# PUBLIC_SITE: the public read-only viewer's bucket (sites.json,
-# media/<id>/<file>, the PMTiles archive). The instant-publish mirror
-# (issue #18) keeps sites.json/media/* current here on every save.
-[[r2_buckets]]
-binding = "PUBLIC_SITE"
-bucket_name = "xsites"
-
-# QA: a fully separate Worker (xsites-editor-qa), domain and pair of buckets
+# QA: a fully separate Worker (xsites-editor-qa), domain and bucket
 # in the same Cloudflare account, deployed with `wrangler deploy --env qa`.
 # Nothing here is shared with PROD above except the code and static files.
-# r2_buckets aren't inherited by environments, so both are redeclared.
+# r2_buckets aren't inherited by environments, so it's redeclared.
 [env.qa]
 routes = [{ pattern = "qa.xisle.net", custom_domain = true }]
 
 [[env.qa.r2_buckets]]
-binding = "LIVE_DATA"
+binding = "DATA"
 bucket_name = "xsites-live-data-qa"
-
-[[env.qa.r2_buckets]]
-binding = "PUBLIC_SITE"
-bucket_name = "xsites-qa"

@@ -1,8 +1,8 @@
 // xsites-editor's request handler. Deployed as a Cloudflare Worker today
 // (see wrangler.toml), but written against standard Request/Response/URL
 // so it's portable to Node/Deno/Bun with a thin adapter. The only
-// Cloudflare-specific code in this whole file is CloudflareEnv and the two
-// lines in fetch() that wrap its R2 bindings into ObjectStore instances --
+// Cloudflare-specific code in this whole file is CloudflareEnv and the line
+// in fetch() that wraps its R2 binding into an ObjectStore --
 // every handler below operates on Ctx (see objectstore.ts), never on a
 // storage-specific type. The site is public to read; /admin and every
 // write route (POST/PUT/DELETE under /api) require HTTP Basic auth against
@@ -12,7 +12,6 @@
 
 import { type Site, type SiteInput, type Reference, applySiteInput, safeFileName } from "./siteyaml";
 import {
-  getAllSites,
   getSite,
   saveSite,
   deleteSite,
@@ -24,21 +23,21 @@ import {
   MediaNotFoundError,
 } from "./store";
 import { handleTileRequest } from "./tiles";
-import { publishSiteChange, publishSiteRemoval, publishMedia, publishDeleteMedia, publishDeleteSiteMedia } from "./publish";
+import { publishAllSites, publishSiteChange, publishSiteRemoval, readPublishedSites } from "./publish";
 import { R2ObjectStore, type ObjectStore } from "./objectstore";
 
-// The raw shape Cloudflare hands fetch() -- just the two R2 bindings.
-// Nothing past fetch() itself should reference this type.
+// The raw shape Cloudflare hands fetch(). DATA is the environment's one R2
+// bucket: per-site YAML and media under sites/, the derived sites.json, and
+// the label tiles under tiles/. Nothing past fetch() itself should
+// reference this type.
 export interface CloudflareEnv {
-  LIVE_DATA: R2Bucket;
-  PUBLIC_SITE: R2Bucket;
+  DATA: R2Bucket;
   ASSETS: Fetcher;
   ADMIN_PASSWORD: string;
 }
 
 interface Ctx {
-  live: ObjectStore;
-  publicStore: ObjectStore;
+  store: ObjectStore;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -49,39 +48,22 @@ function errorResponse(status: number, message: string): Response {
   return json({ error: message }, status);
 }
 
-// GET /api/sites and GET /sites.json (for the public viewer) both read this same pre-aggregated snapshot rather than
-// fetching every site individually from LIVE_DATA -- safe for the
-// authenticated list too, not just the public one, because every write
-// handler below awaits publishSiteChange/publishSiteRemoval before
-// responding, so the mirror is always current by the time a client could
-// plausibly re-fetch the list. Individual site reads/writes (GET/PUT/DELETE
-// /api/sites/<id>) still go straight to LIVE_DATA, unaffected -- only the
-// "fetch all N sites" path benefited from this (measured ~5s doing that
-// individually, vs ~150ms for one object here).
-async function readPublishedSites(ctx: Ctx): Promise<Response | null> {
-  const obj = await ctx.publicStore.get("sites.json");
-  if (!obj) return null;
-  return new Response(obj.data, { headers: { "Content-Type": "application/json; charset=utf-8" } });
-}
-
+// GET /api/sites and GET /sites.json (for the public viewer) both read the
+// pre-aggregated sites.json rather than every site's YAML -- safe for the
+// authenticated list too, because every write handler below awaits
+// publishSiteChange/publishSiteRemoval before responding, so it's always
+// current by the time a client could plausibly re-fetch the list. If it
+// doesn't exist yet (a fresh or freshly seeded bucket), it's built from the
+// YAML on the spot and stored for next time.
 async function handleListSites(ctx: Ctx): Promise<Response> {
-  const cached = await readPublishedSites(ctx);
-  if (cached) return cached;
-  // Falls back to a live aggregate only if the mirror doesn't exist yet
-  // (e.g. a fresh deployment before the first save) -- normal operation
-  // never reaches this branch.
-  const sites = await getAllSites(ctx.live);
-  sites.sort((a, b) => a.id.localeCompare(b.id));
-  return json(sites);
-}
-
-async function handleSitesJson(ctx: Ctx): Promise<Response> {
-  return (await readPublishedSites(ctx)) ?? json([]);
+  const data = await readPublishedSites(ctx.store);
+  if (data) return new Response(data, { headers: { "Content-Type": "application/json; charset=utf-8" } });
+  return json(await publishAllSites(ctx.store));
 }
 
 async function handleGetSite(ctx: Ctx, id: string): Promise<Response> {
   try {
-    return json(await getSite(ctx.live, id));
+    return json(await getSite(ctx.store, id));
   } catch (err) {
     if (err instanceof SiteNotFoundError) return errorResponse(404, "not found");
     throw err;
@@ -97,7 +79,7 @@ async function handleCreateSite(ctx: Ctx, request: Request): Promise<Response> {
   }
   if (input.name == null || input.name.trim() === "") return errorResponse(400, "name is required");
 
-  const id = await uniqueSiteId(ctx.live, input.name);
+  const id = await uniqueSiteId(ctx.store, input.name);
   const site: Site = {
     id,
     name: "",
@@ -113,21 +95,21 @@ async function handleCreateSite(ctx: Ctx, request: Request): Promise<Response> {
     references: [],
   };
   applySiteInput(site, input);
-  // The LIVE_DATA save and the PUBLIC_SITE mirror update touch different
-  // buckets and don't depend on each other's result, so they run
-  // concurrently instead of as two sequential round trips. Returning the
+  // The YAML save and the sites.json update are different objects and don't
+  // depend on each other's result, so they run concurrently instead of as
+  // two sequential round trips. Returning the
   // in-memory site (rather than re-fetching it) skips a third: saveSite
   // writes exactly this object, and parseSiteYaml/renderSiteYaml are
   // lossless inverses of each other, so a re-read would just reconstruct
   // what's already in hand.
-  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  await Promise.all([saveSite(ctx.store, site), publishSiteChange(ctx.store, site)]);
   return json(site, 201);
 }
 
 async function handleUpdateSite(ctx: Ctx, id: string, request: Request): Promise<Response> {
   let site: Site;
   try {
-    site = await getSite(ctx.live, id);
+    site = await getSite(ctx.store, id);
   } catch (err) {
     if (err instanceof SiteNotFoundError) return errorResponse(404, "not found");
     throw err;
@@ -141,20 +123,19 @@ async function handleUpdateSite(ctx: Ctx, id: string, request: Request): Promise
   applySiteInput(site, input);
   // See handleCreateSite: the two writes are independent, and the
   // in-memory site is already exactly what saveSite persisted.
-  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  await Promise.all([saveSite(ctx.store, site), publishSiteChange(ctx.store, site)]);
   return json(site);
 }
 
 async function handleDeleteSite(ctx: Ctx, id: string): Promise<Response> {
   try {
-    await getSite(ctx.live, id);
+    await getSite(ctx.store, id);
   } catch (err) {
     if (err instanceof SiteNotFoundError) return errorResponse(404, "not found");
     throw err;
   }
-  await deleteSite(ctx.live, id);
-  await publishDeleteSiteMedia(ctx.publicStore, id);
-  await publishSiteRemoval(ctx.live, ctx.publicStore, id);
+  await deleteSite(ctx.store, id);
+  await publishSiteRemoval(ctx.store, id);
   return json({ ok: true });
 }
 
@@ -195,7 +176,7 @@ function base64ToBytes(b64: string): Uint8Array {
 async function handleUploadMedia(ctx: Ctx, id: string, request: Request): Promise<Response> {
   let site: Site;
   try {
-    site = await getSite(ctx.live, id);
+    site = await getSite(ctx.store, id);
   } catch (err) {
     if (err instanceof SiteNotFoundError) return errorResponse(404, "not found");
     throw err;
@@ -216,8 +197,7 @@ async function handleUploadMedia(ctx: Ctx, id: string, request: Request): Promis
   } catch {
     return errorResponse(400, "invalid dataBase64");
   }
-  await saveMedia(ctx.live, id, filename, data);
-  await publishMedia(ctx.publicStore, id, filename, data);
+  await saveMedia(ctx.store, id, filename, data);
 
   const newRef: Reference = {
     type: mediaType,
@@ -234,14 +214,14 @@ async function handleUploadMedia(ctx: Ctx, id: string, request: Request): Promis
 
   // See handleCreateSite: the two writes are independent, and the
   // in-memory site is already exactly what saveSite persisted.
-  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  await Promise.all([saveSite(ctx.store, site), publishSiteChange(ctx.store, site)]);
   return json(site, 201);
 }
 
 async function handleUpdateMedia(ctx: Ctx, id: string, filename: string, request: Request): Promise<Response> {
   let site: Site;
   try {
-    site = await getSite(ctx.live, id);
+    site = await getSite(ctx.store, id);
   } catch (err) {
     if (err instanceof SiteNotFoundError) return errorResponse(404, "not found");
     throw err;
@@ -262,14 +242,14 @@ async function handleUpdateMedia(ctx: Ctx, id: string, filename: string, request
   if (!found) return errorResponse(404, "media not found");
   // See handleCreateSite: the two writes are independent, and the
   // in-memory site is already exactly what saveSite persisted.
-  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  await Promise.all([saveSite(ctx.store, site), publishSiteChange(ctx.store, site)]);
   return json(site);
 }
 
 async function handleDeleteMedia(ctx: Ctx, id: string, filename: string): Promise<Response> {
   let site: Site;
   try {
-    site = await getSite(ctx.live, id);
+    site = await getSite(ctx.store, id);
   } catch (err) {
     if (err instanceof SiteNotFoundError) return errorResponse(404, "not found");
     throw err;
@@ -277,22 +257,21 @@ async function handleDeleteMedia(ctx: Ctx, id: string, filename: string): Promis
   // Best-effort: if the underlying object is already gone, still proceed
   // to drop the reference below.
   try {
-    await deleteMedia(ctx.live, id, filename);
+    await deleteMedia(ctx.store, id, filename);
   } catch (err) {
     if (!(err instanceof MediaNotFoundError)) throw err;
   }
-  await publishDeleteMedia(ctx.publicStore, id, filename);
 
   site.references = site.references.filter((ref) => !ref.url.endsWith("/" + filename));
   // See handleCreateSite: the two writes are independent, and the
   // in-memory site is already exactly what saveSite persisted.
-  await Promise.all([saveSite(ctx.live, site), publishSiteChange(ctx.live, ctx.publicStore, site)]);
+  await Promise.all([saveSite(ctx.store, site), publishSiteChange(ctx.store, site)]);
   return json(site);
 }
 
 async function handleGetMedia(ctx: Ctx, id: string, filename: string): Promise<Response> {
   try {
-    const obj = await getMedia(ctx.live, id, filename);
+    const obj = await getMedia(ctx.store, id, filename);
     return new Response(obj.data, {
       headers: { "Content-Type": obj.contentType ?? "application/octet-stream" },
     });
@@ -352,7 +331,7 @@ async function dispatch(ctx: Ctx, env: CloudflareEnv, request: Request): Promise
   }
 
   if (segments.length === 1 && segments[0] === "sites.json" && method === "GET") {
-    return await handleSitesJson(ctx);
+    return await handleListSites(ctx);
   } else if (segments[0] === "api" && segments[1] === "sites") {
     if (segments.length === 2) {
       if (method === "GET") return await handleListSites(ctx);
@@ -377,7 +356,7 @@ async function dispatch(ctx: Ctx, env: CloudflareEnv, request: Request): Promise
   } else if (segments[0] === "media" && segments.length === 3 && method === "GET") {
     return await handleGetMedia(ctx, segments[1], segments[2]);
   } else if (segments[0] === "tiles" && method === "GET") {
-    const tileResponse = await handleTileRequest(request, ctx.publicStore);
+    const tileResponse = await handleTileRequest(request, ctx.store);
     if (tileResponse) return tileResponse;
   }
 
@@ -386,10 +365,7 @@ async function dispatch(ctx: Ctx, env: CloudflareEnv, request: Request): Promise
 
 export default {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
-    const ctx: Ctx = {
-      live: new R2ObjectStore(env.LIVE_DATA),
-      publicStore: new R2ObjectStore(env.PUBLIC_SITE),
-    };
+    const ctx: Ctx = { store: new R2ObjectStore(env.DATA) };
 
     try {
       return await dispatch(ctx, env, request);
