@@ -15,6 +15,9 @@
 #  - Run workflow on master          -> PROD (waits for your approval)
 #  - Run workflow on any other branch -> QA
 #
+# Each successful deploy is tagged <qa|prod>-YYYYMMDD-HHMMSS (UTC) on the
+# commit it deployed, so the repo's tags list is a history of what went live.
+#
 # Uses the target environment's secrets and R2_BUCKET variable, written by
 # `go run ./setup`.
 name: 1. Deploy
@@ -25,7 +28,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # to push the deploy tag
 
 jobs:
   deploy:
@@ -140,3 +143,14 @@ jobs:
         run: |
           curl -fsS "$SITE_URL/sites.json" -o sites.json
           echo "sites live on $TARGET: $(grep -o '"id":' sites.json | wc -l)"
+
+      # Marks exactly which commit is live where, e.g. prod-20261023-215827.
+      # Only reached when everything above succeeded.
+      - name: Tag the deploy
+        run: |
+          tag="$TARGET-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "xsites deploy"
+          git config user.email "actions@users.noreply.github.com"
+          git tag -a "$tag" -m "Deployed to $TARGET ($SITE_URL) by $GITHUB_ACTOR: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push origin "refs/tags/$tag"
+          echo "tagged $tag"
