@@ -22,7 +22,7 @@ npm install
 npm run typecheck   # tsc --noEmit — the only check; there is no test suite or linter
 ```
 
-Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on a `prod-*` tag -> PROD rollback to that version (approval); on another branch/tag -> QA. Each successful deploy is tagged `qa-`/`prod-YYYYMMDD-HHMMSS`. It also fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow refreshes airspace and `etl/tiles-date.txt` via a PR.
+Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on a `prod-*` tag -> PROD rollback to that version (approval); on another branch/tag -> QA. Each successful deploy is tagged `qa-`/`prod-YYYYMMDD-HHMMSS`. It also fetches the latest airspace (falling back to the committed copy), fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow bumps `etl/tiles-date.txt` via a PR.
 
 ETL (`etl/`, Go, offline dev-time only):
 
@@ -60,7 +60,7 @@ Frontend has no bundler: `app.js` files are plain ES modules using MapLibre GL l
 ## Gotchas
 
 - Bump the `?v=<unix time>` query on `app.js`/`style.css` in both `index.html` files whenever those change, or browsers serve stale JS/CSS.
-- `server/public/data/airspace.geojson` is a tracked copy; the Update workflow refreshes it (by hand: `etl airspace`, then copy `etl/output/airspace.geojson` over it).
+- `server/public/data/airspace.geojson` is a tracked copy used by DEV and as Deploy's fallback; Deploy overwrites it with a fresh `etl airspace` before every deploy (refresh it by hand: `etl airspace`, then copy `etl/output/airspace.geojson` over it).
 - The `.pmtiles` reaches QA/PROD R2 only through Deploy, which rebuilds it when `etl/tiles-date.txt` is newer than the bucket's `tiles/labels-vancouver-island.date`.
 - Site markers: name labels are a second, independent MapLibre `Marker` anchored to the pin's coordinate, deliberately not a child of the pin element.
 - The site list is fetched before constructing the `Map` and rendered without waiting for the `load` event, so a slow basemap doesn't leave the sidebar empty.

@@ -1,8 +1,11 @@
 # Deploys the whole app from this repo to QA or PROD, filling in any data
 # the environment is missing. Every run:
 #
-#  1. Web app and server: always deployed (server/src + server/public,
-#     which includes data/airspace.geojson).
+#  1. Airspace: always fetched fresh from OpenAIP (etl airspace) into
+#     server/public/data/airspace.geojson just before deploying. If the
+#     fetch fails or looks broken, the committed copy is deployed instead
+#     with a warning.
+#     Web app and server: always deployed (server/src + server/public).
 #  2. Tiles: built (etl tiles) and uploaded only when the bucket has none,
 #     or they're from an older Protomaps build than etl/tiles-date.txt
 #     (which the Update workflow bumps).
@@ -15,7 +18,8 @@
 #  - Run workflow on master          -> PROD (waits for your approval)
 #  - Run workflow on a prod-* tag     -> PROD (waits for your approval):
 #    redeploys that earlier live version, i.e. a rollback. Code only --
-#    site data is left as it is (use Restore PROD for data).
+#    site data is left as it is (use Restore PROD for data), and airspace
+#    is still the latest.
 #  - Run workflow on any other branch or tag -> QA
 #
 # Each successful deploy is tagged <qa|prod>-YYYYMMDD-HHMMSS (UTC) on the
@@ -56,7 +60,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- 1. Web app and server ---
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: etl/go.mod
+          cache-dependency-path: etl/go.sum
+
+      # --- 1. Latest airspace, then web app and server ---
+      # A bad trim shows up as a wildly different size (today's is ~320 KB).
+      # Never block a deploy on OpenAIP: fall back to the committed copy.
+      - name: Fetch latest airspace
+        run: |
+          if (cd etl && go run . airspace); then
+            size=$(stat -c %s etl/output/airspace.geojson)
+            echo "airspace.geojson: $size bytes"
+            if [ "$size" -ge 50000 ] && [ "$size" -le 5000000 ]; then
+              cp etl/output/airspace.geojson server/public/data/airspace.geojson
+              exit 0
+            fi
+            echo "::warning::fetched airspace is $size bytes, outside 50 KB - 5 MB; deploying the committed copy"
+          else
+            echo "::warning::airspace fetch failed; deploying the committed copy"
+          fi
+          git checkout -- server/public/data/airspace.geojson
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -93,11 +118,6 @@ jobs:
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-go@v5
-        if: steps.tiles.outputs.build == 'true'
-        with:
-          go-version-file: etl/go.mod
-          cache-dependency-path: etl/go.sum
       # Protomaps only keeps recent builds, so if the pinned one is gone the
       # latest is used instead; the date actually built is what's recorded.
       - name: Build and upload tiles

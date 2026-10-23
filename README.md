@@ -205,8 +205,8 @@ machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on a `prod-…` tag -> PROD, rolling back to that version (your approval); on any other branch or tag -> QA | deploys the whole app from the repo: web app and server always; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites; tags the commit `qa-`/`prod-YYYYMMDD-HHMMSS` on success |
-| `update.yml` (**Update**) | 1st of each month, or by hand | regenerates airspace and bumps `etl/tiles-date.txt` to the newest Protomaps build, then opens one PR; merging it deploys both to QA |
+| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on a `prod-…` tag -> PROD, rolling back to that version (your approval); on any other branch or tag -> QA | deploys the whole app from the repo: latest airspace from OpenAIP, web app and server always; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites; tags the commit `qa-`/`prod-YYYYMMDD-HHMMSS` on success |
+| `update.yml` (**Update**) | 1st of each month, or by hand | bumps `etl/tiles-date.txt` to the newest Protomaps build in a PR; merging it deploys to QA, rebuilding the tiles |
 | `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media onto this repo's `backup` branch, committed only on change |
 | `restore-prod.yml` | by hand (type "restore prod"; needs your approval) | replaces PROD's data with the latest backup, or a chosen backup commit; saves PROD's current data as an artifact first |
 
@@ -314,8 +314,10 @@ go build -o etl.exe .   # or just `go run .`
 **Airspace** (`./etl.exe airspace`): downloads OpenAIP's Canada-wide export,
 caches it at `etl/data-sources/openaip-ca-airspace.geojson`, trims it to the
 Vancouver Island flying area, and writes `etl/output/airspace.geojson`.
-The Update workflow copies it into `server/public/data/airspace.geojson`
-(see **Notes** below for why it's not read directly from `etl/output/`).
+Deploy runs it on every deploy and copies the result into
+`server/public/data/airspace.geojson` (see **Notes** below for why it's not
+read directly from `etl/output/`), so QA and PROD always get the latest;
+the committed copy is what DEV serves and Deploy's fallback if OpenAIP fails.
 
 **Tiles** (`./etl.exe tiles [YYYYMMDD]`): extracts the Vancouver Island bbox
 out of a [Protomaps daily basemap build](https://maps.protomaps.com/builds/)
