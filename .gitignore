@@ -17,3 +17,4 @@ server/node_modules/
 
 # DEV server data (go run ./dev), seeded from the backup branch
 dev/data/
+etl/output
