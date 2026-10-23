@@ -1,15 +1,14 @@
 # Deploys the whole app from this repo to QA or PROD, filling in any data
 # the environment is missing. Every run:
 #
-#  1. Airspace: always fetched fresh from OpenAIP (etl airspace) into
-#     server/public/data/airspace.geojson just before deploying. If the
-#     fetch fails or looks broken, the committed copy is deployed instead
-#     with a warning.
-#     Web app and server: always deployed (server/src + server/public).
-#  2. Tiles: built (etl tiles) and uploaded only when the bucket has none,
+#  1. Web app and server: always deployed (server/src + server/public).
+#  2. Airspace: always built fresh (etl airspace) and uploaded to the bucket
+#     as airspace.geojson. If OpenAIP fails or the file looks broken, the
+#     bucket's current copy stays, with a warning (an error if it has none).
+#  3. Tiles: built (etl tiles) and uploaded only when the bucket has none,
 #     or they're from an older Protomaps build than etl/tiles-date.txt
 #     (which the Update workflow bumps).
-#  3. Sites YAML and media: copied from the "backup" branch only when the
+#  4. Sites YAML and media: copied from the "backup" branch only when the
 #     bucket has no sites at all, so a fresh environment starts with PROD's
 #     data. Live data is never overwritten.
 #
@@ -65,23 +64,7 @@ jobs:
           go-version-file: etl/go.mod
           cache-dependency-path: etl/go.sum
 
-      # --- 1. Latest airspace, then web app and server ---
-      # A bad trim shows up as a wildly different size (today's is ~320 KB).
-      # Never block a deploy on OpenAIP: fall back to the committed copy.
-      - name: Fetch latest airspace
-        run: |
-          if (cd etl && go run . airspace); then
-            size=$(stat -c %s etl/output/airspace.geojson)
-            echo "airspace.geojson: $size bytes"
-            if [ "$size" -ge 50000 ] && [ "$size" -le 5000000 ]; then
-              cp etl/output/airspace.geojson server/public/data/airspace.geojson
-              exit 0
-            fi
-            echo "::warning::fetched airspace is $size bytes, outside 50 KB - 5 MB; deploying the committed copy"
-          else
-            echo "::warning::airspace fetch failed; deploying the committed copy"
-          fi
-          git checkout -- server/public/data/airspace.geojson
+      # --- 1. Web app and server ---
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -103,9 +86,34 @@ jobs:
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
 
-      # --- 2. Tiles, if missing or out of date ---
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      # --- 2. Airspace, always the latest ---
+      # A bad trim shows up as a wildly different size (today's is ~320 KB).
+      # Never block a deploy on OpenAIP if the bucket already has a copy.
+      - name: Build and upload airspace
+        run: |
+          if (cd etl && go run . airspace); then
+            size=$(stat -c %s etl/output/airspace.geojson)
+            echo "airspace.geojson: $size bytes"
+            if [ "$size" -ge 50000 ] && [ "$size" -le 5000000 ]; then
+              rclone copyto etl/output/airspace.geojson "r2:$BUCKET/airspace.geojson" \
+                --s3-no-check-bucket --header-upload "Content-Type: application/geo+json" -v
+              exit 0
+            fi
+            msg="built airspace is $size bytes, outside 50 KB - 5 MB"
+          else
+            msg="airspace build failed"
+          fi
+          if rclone lsf "r2:$BUCKET/airspace.geojson" | grep -q .; then
+            echo "::warning::$msg; keeping the bucket's current airspace"
+          else
+            echo "::error::$msg and the bucket has no airspace"
+            exit 1
+          fi
+
+      # --- 3. Tiles, if missing or out of date ---
       - name: Check tiles
         id: tiles
         run: |
@@ -134,7 +142,7 @@ jobs:
             --s3-no-check-bucket --header-upload "Content-Type: application/octet-stream" -v
           rclone copyto etl/output/labels-vancouver-island.date "r2:$BUCKET/$TILES_DATE_KEY" --s3-no-check-bucket
 
-      # --- 3. Sites, only into an empty bucket ---
+      # --- 4. Sites, only into an empty bucket ---
       - name: Check sites
         id: sites
         run: |
@@ -157,7 +165,7 @@ jobs:
         if: steps.sites.outputs.seed == 'true'
         run: |
           git -C backup log -1 --format='Seeding from backup %h (%cd)'
-          rclone copy backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" -v
+          rclone copy backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" --exclude "/airspace.geojson" -v
           rclone deletefile "r2:$BUCKET/sites.json" || true
 
       # sites.json is derived and rebuilt on request if missing; ask for it so

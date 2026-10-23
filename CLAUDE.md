@@ -12,7 +12,7 @@ DEV (`dev/`, Go, no Node needed):
 go run ./dev        # http://localhost:8787, /admin/ needs no password; live-reloads server/public
 ```
 
-Serves `server/public` directly, site data from `dev/data/` (gitignored, seeded from the `backup` branch on first run), tiles from `etl/output/*.pmtiles`. Its API (`dev/api.go`, `dev/siteyaml.go`) is a Go port of the Worker -- **change it in step with `server/src/` routes and `siteyaml.ts`**. The `xsite` entry in `.claude/launch.json` starts it for previews.
+Serves `server/public` directly, site data from `dev/data/` (gitignored, seeded from the `backup` branch on first run), tiles and airspace straight from `etl/output/` (run `etl tiles` / `etl airspace` first). Its API (`dev/api.go`, `dev/siteyaml.go`) is a Go port of the Worker -- **change it in step with `server/src/` routes and `siteyaml.ts`**. The `xsite` entry in `.claude/launch.json` starts it for previews.
 
 Server (`server/`, Cloudflare Worker + static assets):
 
@@ -22,7 +22,7 @@ npm install
 npm run typecheck   # tsc --noEmit — the only check; there is no test suite or linter
 ```
 
-Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on a `prod-*` tag -> PROD rollback to that version (approval); on another branch/tag -> QA. Each successful deploy is tagged `qa-`/`prod-YYYYMMDD-HHMMSS`. It also fetches the latest airspace (falling back to the committed copy), fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow bumps `etl/tiles-date.txt` via a PR.
+Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on a `prod-*` tag -> PROD rollback to that version (approval); on another branch/tag -> QA. Each successful deploy is tagged `qa-`/`prod-YYYYMMDD-HHMMSS`. It also builds and uploads the latest airspace to R2 (keeping the bucket's copy if OpenAIP fails), fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow bumps `etl/tiles-date.txt` via a PR.
 
 ETL (`etl/`, Go, offline dev-time only):
 
@@ -49,7 +49,7 @@ One Worker (`server/src/index.ts`) serves everything; `server/public/` is the so
 - `/` — public read-only viewer (`public/app.js`), reads `GET /sites.json` (a published snapshot, not `/api/sites`).
 - `/admin` — full editor (`public/admin/app.js`). `/admin` and all writes under `/api` require HTTP Basic auth (any username, password = `ADMIN_PASSWORD` secret) via `requireAuth` in `index.ts`. `run_worker_first` in `wrangler.toml` is what routes those through the Worker before assets.
 - Two environments in `wrangler.toml`: PROD (top level, `xsites-prod`, xisle.net, bucket `xsites-prod`) and `[env.qa]` (`xsites-qa`, qa.xisle.net, bucket `xsites-qa`).
-- One R2 bucket per environment, bound as `DATA`: authoritative per-site YAML at `sites/<id>.yaml`, media at `sites/<id>/media/<file>`, the derived `sites.json`, and the `.pmtiles` label archive under `tiles/`.
+- One R2 bucket per environment, bound as `DATA`: authoritative per-site YAML at `sites/<id>.yaml`, media at `sites/<id>/media/<file>`, the derived `sites.json`, `airspace.geojson` (served at `/data/airspace.geojson`), and the `.pmtiles` label archive under `tiles/`.
 - `publish.ts` rewrites `sites.json` on every save so list views read one object instead of parsing every YAML; it's rebuilt from the YAML if missing.
 - `tiles.ts` serves vector label tiles via byte-range reads on `tiles/<archive>.pmtiles` in R2 (`pmtiles` package).
 - `store.ts`, `publish.ts`, `tiles.ts` depend on the `ObjectStore` interface (`objectstore.ts`), not R2 directly.
@@ -60,7 +60,7 @@ Frontend has no bundler: `app.js` files are plain ES modules using MapLibre GL l
 ## Gotchas
 
 - Bump the `?v=<unix time>` query on `app.js`/`style.css` in both `index.html` files whenever those change, or browsers serve stale JS/CSS.
-- `server/public/data/airspace.geojson` is a tracked copy used by DEV and as Deploy's fallback; Deploy overwrites it with a fresh `etl airspace` before every deploy (refresh it by hand: `etl airspace`, then copy `etl/output/airspace.geojson` over it).
+- Airspace and tiles are both ETL outputs (gitignored in `etl/output/`), never in `server/public/`: DEV reads them from `etl/output/`, Deploy uploads them to R2 (airspace every run).
 - The `.pmtiles` reaches QA/PROD R2 only through Deploy, which rebuilds it when `etl/tiles-date.txt` is newer than the bucket's `tiles/labels-vancouver-island.date`.
 - Site markers: name labels are a second, independent MapLibre `Marker` anchored to the pin's coordinate, deliberately not a child of the pin element.
 - The site list is fetched before constructing the `Map` and rendered without waiting for the `load` event, so a slow basemap doesn't leave the sidebar empty.

@@ -54,7 +54,7 @@ jobs:
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
       - name: Save PROD's current data first
-        run: rclone copy "r2:$BUCKET" before --exclude "tiles/**" --exclude "/sites.json" -v
+        run: rclone copy "r2:$BUCKET" before --exclude "tiles/**" --exclude "/sites.json" --exclude "/airspace.geojson" -v
       - uses: actions/upload-artifact@v4
         with:
           name: prod-before-restore
@@ -62,9 +62,9 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
       # sync makes PROD match the snapshot (sites added since are removed);
-      # excluded paths (tiles, sites.json) are neither copied nor deleted.
+      # excluded paths (tiles, sites.json, airspace.geojson) are neither copied nor deleted.
       - name: Restore the snapshot into PROD
-        run: rclone sync backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" -v
+        run: rclone sync backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" --exclude "/airspace.geojson" -v
       # sites.json is derived; with it gone, the next request rebuilds it from
       # the restored YAML. Request it now so that happens here.
       - name: Rebuild sites.json

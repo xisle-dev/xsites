@@ -70,7 +70,9 @@ see github issue #11 for the Cloud Run migration.
   OpenAIP (CC BY-NC 4.0, ultimately sourced from NAV CANADA's Designated
   Airspace Handbook), pre-filtered to the Vancouver Island flying area by
   `etl airspace` (see **Regenerating the ETL outputs** below) and served
-  from `server/public/data/airspace.geojson`. Off by default (most visits
+  at `/data/airspace.geojson` -- by the Worker from the bucket's
+  `airspace.geojson`, which Deploy refreshes on every run (DEV serves
+  `etl/output/airspace.geojson`). Off by default (most visits
   never need it), and this file itself isn't even fetched until the "Show
   airspace" checkbox is first ticked — its GeoJSON source starts out empty
   and is populated on demand.
@@ -154,8 +156,10 @@ Then open <http://localhost:8787> (viewer) and <http://localhost:8787/admin/>
 - Site data lives in `dev/data/` (gitignored) with the same layout as an R2
   bucket. The first run fills it from the `backup` branch (a copy of PROD);
   delete `dev/data/` to start over. Edits stay on your PC.
-- Label tiles come from `etl/output/labels-vancouver-island.pmtiles`; build
-  them once with `cd etl && go run . tiles`.
+- Label tiles and airspace come straight from `etl/output/`
+  (`labels-vancouver-island.pmtiles`, `airspace.geojson`); build them with
+  `cd etl && go run . tiles` and `go run . airspace`, and rerun either to
+  refresh it (restart DEV after new tiles).
 - The API is a Go stand-in (`dev/api.go`, `dev/siteyaml.go`) for the Worker
   in `server/src/`. If you change the Worker's routes or the site YAML
   format, change `dev/` to match. Restart `go run ./dev` after changing
@@ -205,7 +209,7 @@ machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on a `prod-…` tag -> PROD, rolling back to that version (your approval); on any other branch or tag -> QA | deploys the whole app from the repo: latest airspace from OpenAIP, web app and server always; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites; tags the commit `qa-`/`prod-YYYYMMDD-HHMMSS` on success |
+| `deploy.yml` (**Deploy**) | every merge to `master` -> QA; Run workflow on `master` -> PROD (your approval); on a `prod-…` tag -> PROD, rolling back to that version (your approval); on any other branch or tag -> QA | deploys the whole app from the repo: web app and server always; the latest airspace built and uploaded to the bucket every run; tiles only if the bucket's are missing or older than `etl/tiles-date.txt`; sites YAML and media from the `backup` branch only if the bucket has no sites; tags the commit `qa-`/`prod-YYYYMMDD-HHMMSS` on success |
 | `update.yml` (**Update**) | 1st of each month, or by hand | bumps `etl/tiles-date.txt` to the newest Protomaps build in a PR; merging it deploys to QA, rebuilding the tiles |
 | `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media onto this repo's `backup` branch, committed only on change |
 | `restore-prod.yml` | by hand (type "restore prod"; needs your approval) | replaces PROD's data with the latest backup, or a chosen backup commit; saves PROD's current data as an artifact first |
@@ -301,10 +305,14 @@ regardless of how the request-handling code is structured.
 `etl/` is a single Go program (`etl/main.go`, `etl/airspace.go`,
 `etl/tiles.go`) that builds this app's two regenerable, offline data
 artifacts. Nothing here runs in production; the **Update** and **Deploy**
-workflows run it for QA and PROD, and you run `etl tiles` once for DEV. Raw downloads worth caching land in `etl/data-sources/`
-(gitignored); final artifacts land in `etl/output/` -- `airspace.geojson`
-is small and committed there directly, `labels-vancouver-island.pmtiles` is
-~200MB and gitignored.
+workflows run it for QA and PROD, and you run it yourself for DEV. Raw
+downloads worth caching land in `etl/data-sources/`; final artifacts land in
+`etl/output/`. Both are gitignored. The two outputs are handled the same way:
+DEV reads them from `etl/output/`, and Deploy builds them on the runner and
+uploads them to the environment's R2 bucket (`airspace.geojson`,
+`tiles/labels-vancouver-island.pmtiles`), where the Worker serves them from.
+Neither ships in `server/public/` -- the pmtiles is far over Workers Assets'
+25 MB per-file limit.
 
 ```bash
 cd etl
@@ -314,10 +322,8 @@ go build -o etl.exe .   # or just `go run .`
 **Airspace** (`./etl.exe airspace`): downloads OpenAIP's Canada-wide export,
 caches it at `etl/data-sources/openaip-ca-airspace.geojson`, trims it to the
 Vancouver Island flying area, and writes `etl/output/airspace.geojson`.
-Deploy runs it on every deploy and copies the result into
-`server/public/data/airspace.geojson` (see **Notes** below for why it's not
-read directly from `etl/output/`), so QA and PROD always get the latest;
-the committed copy is what DEV serves and Deploy's fallback if OpenAIP fails.
+Deploy runs it on every deploy, so QA and PROD always get the latest; if
+OpenAIP fails, the bucket keeps its current copy.
 
 **Tiles** (`./etl.exe tiles [YYYYMMDD]`): extracts the Vancouver Island bbox
 out of a [Protomaps daily basemap build](https://maps.protomaps.com/builds/)
@@ -349,8 +355,3 @@ date.
   reliably fix it. Bump the relevant `?v=` value(s) (e.g. to the current
   unix time) whenever `app.js` or `style.css` changes, or a deploy can
   silently keep serving stale JS to already-open tabs.
-- `server/public/data/airspace.geojson` is its own tracked copy, not read
-  directly from `etl/output/` -- Workers Assets deploys whatever's
-  physically in `server/public/` at `wrangler deploy` time, and the server
-  has no access to a developer's local `etl/output/` at runtime. Copy the
-  file over after every `etl airspace` regen, same as `app.js`/`style.css`.

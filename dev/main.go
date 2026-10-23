@@ -11,8 +11,10 @@
 //     (sites/<id>.yaml, sites/<id>/media/<file>, sites.json). On first run
 //     it's filled from the repo's "backup" branch (a copy of PROD); delete
 //     dev/data/ to start over. Edits made in /admin stay local.
-//   - Label tiles come from etl/output/labels-vancouver-island.pmtiles;
-//     build it once with `cd etl && go run . tiles`.
+//   - Label tiles and the airspace overlay come straight from etl/output
+//     (labels-vancouver-island.pmtiles, airspace.geojson), the files
+//     `cd etl && go run . tiles` and `go run . airspace` write. QA and PROD
+//     serve the same two files from their R2 bucket.
 //
 // The API here is a Go stand-in for the Worker in server/src (index.ts,
 // store.ts, publish.ts, siteyaml.ts). When the Worker's routes or the site
@@ -53,6 +55,10 @@ func main() {
 	if _, err := os.Stat(filepath.Join(tiles, "labels-vancouver-island.pmtiles")); err != nil {
 		log.Print("WARNING: no label tiles yet; build them with: cd etl && go run . tiles")
 	}
+	airspace := filepath.Join(tiles, "airspace.geojson")
+	if _, err := os.Stat(airspace); err != nil {
+		log.Print("WARNING: no airspace yet; build it with: cd etl && go run . airspace")
+	}
 
 	reload := newReloader(public)
 	api := &api{store: &dirStore{root: data}}
@@ -64,6 +70,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/__dev/reload", reload)
 	mux.Handle("/tiles/", http.StripPrefix("/tiles", tileServer))
+	mux.HandleFunc("/data/airspace.geojson", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/geo+json")
+		http.ServeFile(w, r, airspace)
+	})
 	mux.HandleFunc("/sites.json", api.listSites)
 	mux.Handle("/api/", api)
 	mux.HandleFunc("/media/", api.getMedia)
