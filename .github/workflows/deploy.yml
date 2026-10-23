@@ -13,7 +13,10 @@
 # Where it goes:
 #  - merge (push) to master          -> QA
 #  - Run workflow on master          -> PROD (waits for your approval)
-#  - Run workflow on any other branch -> QA
+#  - Run workflow on a prod-* tag     -> PROD (waits for your approval):
+#    redeploys that earlier live version, i.e. a rollback. Code only --
+#    site data is left as it is (use Restore PROD for data).
+#  - Run workflow on any other branch or tag -> QA
 #
 # Each successful deploy is tagged <qa|prod>-YYYYMMDD-HHMMSS (UTC) on the
 # commit it deployed, so the repo's tags list is a history of what went live.
@@ -34,14 +37,14 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      name: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'prod' || 'qa' }}
-      url: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'https://xisle.net' || 'https://qa.xisle.net' }}
+      name: ${{ (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/prod-'))) && 'prod' || 'qa' }}
+      url: ${{ (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/prod-'))) && 'https://xisle.net' || 'https://qa.xisle.net' }}
     concurrency:
-      group: deploy-${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'prod' || 'qa' }}
+      group: deploy-${{ (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/prod-'))) && 'prod' || 'qa' }}
       cancel-in-progress: false
     env:
-      TARGET: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'prod' || 'qa' }}
-      SITE_URL: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') && 'https://xisle.net' || 'https://qa.xisle.net' }}
+      TARGET: ${{ (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/prod-'))) && 'prod' || 'qa' }}
+      SITE_URL: ${{ (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/prod-'))) && 'https://xisle.net' || 'https://qa.xisle.net' }}
       BUCKET: ${{ vars.R2_BUCKET }}
       RCLONE_CONFIG_R2_TYPE: s3
       RCLONE_CONFIG_R2_PROVIDER: Cloudflare

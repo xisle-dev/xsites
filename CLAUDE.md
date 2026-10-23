@@ -22,7 +22,7 @@ npm install
 npm run typecheck   # tsc --noEmit — the only check; there is no test suite or linter
 ```
 
-Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on another branch -> QA. It also fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow refreshes airspace and `etl/tiles-date.txt` via a PR.
+Deploys only via the Deploy workflow: merge to `master` -> QA; Run workflow on `master` -> PROD (approval); on a `prod-*` tag -> PROD rollback to that version (approval); on another branch/tag -> QA. Each successful deploy is tagged `qa-`/`prod-YYYYMMDD-HHMMSS`. It also fills in missing tiles (vs `etl/tiles-date.txt`) and, into an empty bucket, sites from the `backup` branch. The Update workflow refreshes airspace and `etl/tiles-date.txt` via a PR.
 
 ETL (`etl/`, Go, offline dev-time only):
 
