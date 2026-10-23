@@ -180,6 +180,11 @@ func (c *cloudflare) ensureToken(name string, policies []tokenPolicy) (apiToken,
 	return apiToken{ID: existing.ID, Name: name, Value: value}, nil
 }
 
+func (c *cloudflare) deleteToken(id string) error {
+	_, _, err := c.do("DELETE", "/user/tokens/"+id, nil, nil)
+	return err
+}
+
 func (c *cloudflare) findToken(name string) (*apiToken, error) {
 	for page := 1; ; page++ {
 		var tokens []apiToken

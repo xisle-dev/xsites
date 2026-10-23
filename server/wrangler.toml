@@ -36,3 +36,18 @@ bucket_name = "xsites-live-data"
 [[r2_buckets]]
 binding = "PUBLIC_SITE"
 bucket_name = "xsites"
+
+# QA: a fully separate Worker (xsites-editor-qa), domain and pair of buckets
+# in the same Cloudflare account, deployed with `wrangler deploy --env qa`.
+# Nothing here is shared with PROD above except the code and static files.
+# r2_buckets aren't inherited by environments, so both are redeclared.
+[env.qa]
+routes = [{ pattern = "qa.xisle.net", custom_domain = true }]
+
+[[env.qa.r2_buckets]]
+binding = "LIVE_DATA"
+bucket_name = "xsites-live-data-qa"
+
+[[env.qa.r2_buckets]]
+binding = "PUBLIC_SITE"
+bucket_name = "xsites-qa"

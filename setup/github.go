@@ -59,19 +59,25 @@ func (g *github) do(method, path string, body, out any) (int, error) {
 	return resp.StatusCode, nil
 }
 
-// setSecret encrypts value with the repo's Actions public key (libsodium
-// sealed box, as GitHub requires) and creates or replaces the secret.
-func (g *github) setSecret(repo, name, value string) error {
+// A scope is where Actions secrets and variables live: the whole repo, or
+// one deployment environment of it.
+func repoScope(repo string) string { return "/repos/" + repo + "/actions" }
+
+func envScope(repo, env string) string { return "/repos/" + repo + "/environments/" + env }
+
+// setSecret encrypts value with the scope's public key (libsodium sealed
+// box, as GitHub requires) and creates or replaces the secret.
+func (g *github) setSecret(scope, name, value string) error {
 	var pk struct {
 		KeyID string `json:"key_id"`
 		Key   string `json:"key"`
 	}
-	if _, err := g.do("GET", "/repos/"+repo+"/actions/secrets/public-key", nil, &pk); err != nil {
+	if _, err := g.do("GET", scope+"/secrets/public-key", nil, &pk); err != nil {
 		return err
 	}
 	raw, err := base64.StdEncoding.DecodeString(pk.Key)
 	if err != nil || len(raw) != 32 {
-		return fmt.Errorf("unexpected Actions public key for %s", repo)
+		return fmt.Errorf("unexpected Actions public key for %s", scope)
 	}
 	var recipient [32]byte
 	copy(recipient[:], raw)
@@ -79,28 +85,47 @@ func (g *github) setSecret(repo, name, value string) error {
 	if err != nil {
 		return err
 	}
-	_, err = g.do("PUT", "/repos/"+repo+"/actions/secrets/"+name, map[string]string{
+	_, err = g.do("PUT", scope+"/secrets/"+name, map[string]string{
 		"encrypted_value": base64.StdEncoding.EncodeToString(sealed),
 		"key_id":          pk.KeyID,
 	}, nil)
 	return err
 }
 
-func (g *github) secretExists(repo, name string) (bool, error) {
-	status, err := g.do("GET", "/repos/"+repo+"/actions/secrets/"+name, nil, nil)
+func (g *github) secretExists(scope, name string) (bool, error) {
+	status, err := g.do("GET", scope+"/secrets/"+name, nil, nil)
 	if status == http.StatusNotFound {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (g *github) setVariable(repo, name, value string) error {
+func (g *github) setVariable(scope, name, value string) error {
 	body := map[string]string{"name": name, "value": value}
-	status, err := g.do("PATCH", "/repos/"+repo+"/actions/variables/"+name, body, nil)
+	status, err := g.do("PATCH", scope+"/variables/"+name, body, nil)
 	if status == http.StatusNotFound {
-		_, err = g.do("POST", "/repos/"+repo+"/actions/variables", body, nil)
+		_, err = g.do("POST", scope+"/variables", body, nil)
 	}
 	return err
+}
+
+// ensureEnvironment creates or updates a deployment environment. With a
+// reviewer, every job that targets it waits for that user's approval.
+func (g *github) ensureEnvironment(repo, env string, reviewerID int64) error {
+	body := map[string]any{}
+	if reviewerID != 0 {
+		body["reviewers"] = []map[string]any{{"type": "User", "id": reviewerID}}
+	}
+	_, err := g.do("PUT", envScope(repo, env), body, nil)
+	return err
+}
+
+func (g *github) currentUserID() (int64, error) {
+	var u struct {
+		ID int64 `json:"id"`
+	}
+	_, err := g.do("GET", "/user", nil, &u)
+	return u.ID, err
 }
 
 // ensurePrivateRepo creates owner/name as a private repo (with an initial
@@ -133,9 +158,9 @@ func (g *github) ensurePrivateRepo(full string) (created bool, err error) {
 	return err == nil, err
 }
 
-// replaceDeployKey removes any deploy key with this title and adds pub as a
-// new write-enabled one.
-func (g *github) replaceDeployKey(repo, title, pub string) error {
+// replaceDeployKey removes any deploy key with this title and adds pub in
+// its place.
+func (g *github) replaceDeployKey(repo, title, pub string, readOnly bool) error {
 	var keys []struct {
 		ID    int64  `json:"id"`
 		Title string `json:"title"`
@@ -151,7 +176,7 @@ func (g *github) replaceDeployKey(repo, title, pub string) error {
 		}
 	}
 	_, err := g.do("POST", "/repos/"+repo+"/keys", map[string]any{
-		"title": title, "key": pub, "read_only": false,
+		"title": title, "key": pub, "read_only": readOnly,
 	}, nil)
 	return err
 }

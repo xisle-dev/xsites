@@ -3,9 +3,10 @@
 # only when something changed -- so git history there is a dated record of
 # every edit. Restore with: rclone sync <backup checkout>/data r2:xsites-live-data
 #
-# Secrets: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
-# BACKUP_DEPLOY_KEY (private half of an SSH deploy key with write access
-# on the backup repo). Variable: BACKUP_REPO (e.g. xisle-dev/xsites-backup).
+# PROD only. Runs in the "prod-backup" environment (no approval needed),
+# whose secrets -- a read-only R2 token on xsites-live-data and the backup
+# repo's deploy key -- are written by `go run ./setup`, as is the BACKUP_REPO
+# variable.
 name: Backup
 
 on:
@@ -16,6 +17,7 @@ on:
 jobs:
   backup:
     runs-on: ubuntu-latest
+    environment: prod-backup
     env:
       RCLONE_CONFIG_R2_TYPE: s3
       RCLONE_CONFIG_R2_PROVIDER: Cloudflare

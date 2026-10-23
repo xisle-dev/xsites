@@ -137,7 +137,7 @@ local-disk mode):
 ```bash
 cd server
 npm install
-npm run dev   # wrangler dev --remote
+npm run dev   # wrangler dev --remote --env qa (QA's buckets)
 ```
 
 Then open http://127.0.0.1:8787. This needs `wrangler login` once, and
@@ -201,35 +201,63 @@ npx wrangler deploy
 Wrangler re-uploads changed static assets (`server/public/`) and the server
 script together; no image build, no container registry.
 
+### QA and PROD
+
+Two environments run side by side in the same Cloudflare account and share
+only the code. Everything else is separate:
+
+| | QA | PROD |
+| --- | --- | --- |
+| URL | <https://qa.xisle.net> | <https://xisle.net> |
+| Worker | `xsites-editor-qa` (`wrangler deploy --env qa`) | `xsites-editor` |
+| R2 buckets | `xsites-live-data-qa`, `xsites-qa` | `xsites-live-data`, `xsites` |
+| Admin password | its own | its own |
+| GitHub environment | `qa` | `prod` (deploys need your approval) |
+| Cloudflare tokens | `xsites-deploy-qa`, `xsites-r2-qa` | `xsites-deploy-prod`, `xsites-r2-prod` |
+
+Each environment's R2 token can reach only its own two buckets. The deploy
+tokens are account-wide by necessity (Cloudflare can't scope a token to one
+Worker), so the wall between QA and PROD Workers is the `prod` GitHub
+environment: only jobs that target it, after your approval, get its token.
+`npm run dev` runs against QA.
+
+Code moves QA -> PROD like this: push to `master` -> Deploy ships it to QA
+-> you check qa.xisle.net -> approve the waiting `prod` job in the Actions
+run -> the same commit ships to PROD. A newer push replaces an unapproved
+PROD deploy.
+
 ### GitHub Actions
 
-Four workflows in `.github/workflows/` take every routine job off your own
+Workflows in `.github/workflows/` take every routine job off your own
 machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, then `wrangler deploy` |
+| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, deploy to QA, then to PROD after your approval |
 | `airspace.yml` | 1st of each month, or by hand | `etl airspace`, copies it into `server/public/data/`, opens a PR to review; merging deploys it |
-| `tiles.yml` | by hand (optional build date) | `etl tiles`, uploads the `.pmtiles` to R2 `xsites/tiles/` with rclone |
-| `backup.yml` | nightly, or by hand | `rclone sync` of R2 `xsites-live-data` into a private backup repo, committed only on change |
+| `tiles.yml` | by hand: pick `qa` or `prod` (optional build date) | `etl tiles`, uploads the `.pmtiles` to that environment's public bucket |
+| `backup.yml` | nightly, or by hand | `rclone sync` of PROD's `xsites-live-data` into a private backup repo, committed only on change |
+| `seed-qa.yml` | by hand | replaces QA's data with the latest PROD backup |
 
 One-time setup is a single command, `setup/` (Go, stdlib plus
-`golang.org/x/crypto`), which builds everything below through the
-Cloudflare and GitHub APIs. Every step is safe to re-run:
+`golang.org/x/crypto`), which builds both environments through the
+Cloudflare and GitHub APIs:
 
-- Cloudflare token `xsites-deploy` (Workers scripts/routes, R2, DNS) and
-  the R2 buckets `xsites` and `xsites-live-data`
-- Cloudflare token `xsites-r2` (object read/write on those two buckets
-  only), converted to R2 S3 keys
-- Repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
-  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `ADMIN_PASSWORD`,
-  `BACKUP_DEPLOY_KEY` and variable `BACKUP_REPO`
-- The private backup repo (`xisle-dev/xsites-backup`) and its deploy key
+- Per environment: its R2 buckets (created by a temporary token that is
+  deleted straight after), a deploy token (Workers scripts, routes, DNS --
+  no R2), an R2 token on just its buckets, and a GitHub environment holding
+  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`, `ADMIN_PASSWORD` and variables `R2_LIVE_BUCKET`,
+  `R2_PUBLIC_BUCKET`
+- Backups: the private backup repo (`xisle-dev/xsites-backup`), a
+  `prod-backup` environment with a read-only token on PROD's live bucket
+  and the repo's write deploy key, a read-only key on the backup repo for
+  QA's seeding, and the `BACKUP_REPO` variable
 - "Allow GitHub Actions to create and approve pull requests"
 
-Re-running rotates both Cloudflare token values and the deploy key and
-writes the new ones into GitHub, so a re-run is also how you rotate
-credentials.
+Every step is safe to re-run, and a re-run rotates every token value and
+deploy key and writes the new ones into GitHub -- that's also how you
+rotate credentials.
 
 It needs two credentials that no API can create for you:
 
@@ -246,17 +274,19 @@ Then, in PowerShell:
 cd setup
 $env:CLOUDFLARE_ACCOUNT_ID = "<account id>"
 $env:CLOUDFLARE_BOOTSTRAP_TOKEN = "<bootstrap token>"
-$env:ADMIN_PASSWORD = "<admin password>"   # first run, or to change it
+$env:ADMIN_PASSWORD_QA = "<QA admin password>"      # first run, or to change it
+$env:ADMIN_PASSWORD_PROD = "<PROD admin password>"  # first run, or to change it
 go run . -deploy
 ```
 
 The account ID is the hex string in your dashboard URL
 (`dash.cloudflare.com/<account id>/...`). `-deploy` runs the Deploy
-workflow at the end; on a brand-new account, also run the Tiles workflow
-once to upload the label archive. `ADMIN_PASSWORD` now lives in GitHub and
-every deploy pushes it to the Worker.
+workflow at the end. On first setup, also run Tiles for each environment,
+then Seed QA once the first backup exists. Admin passwords live in GitHub
+and every deploy pushes them to their Worker.
 
-To restore live data from a backup checkout:
+To restore PROD's live data from a backup checkout (needs PROD's
+read/write R2 keys, not the backup's read-only ones):
 `rclone sync data r2:xsites-live-data`.
 
 ### Instant publish

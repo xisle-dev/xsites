@@ -1,15 +1,22 @@
 # Rebuilds the Vancouver Island label tiles from a Protomaps daily build and
-# uploads them to R2 (xsites/tiles/labels-vancouver-island.pmtiles). The
-# ~200 MB archive never touches git. Run by hand when you want fresher
-# labels; the Worker picks up the new file immediately, no deploy needed.
+# uploads them to the chosen environment's public bucket
+# (tiles/labels-vancouver-island.pmtiles). The ~200 MB archive never
+# touches git. Run by hand when you want fresher labels -- QA first, then
+# PROD (which waits for your approval); the Worker picks up the new file
+# immediately, no deploy needed.
 #
-# Secrets: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
-# (an R2 API token with Object Read & Write on the xsites bucket).
+# Uses the target environment's secrets and R2_PUBLIC_BUCKET variable,
+# written by `go run ./setup`.
 name: Tiles
 
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "Environment to upload to"
+        type: choice
+        options: [qa, prod]
+        default: qa
       date:
         description: "Protomaps build date YYYYMMDD (blank = latest)"
         required: false
@@ -18,6 +25,7 @@ on:
 jobs:
   tiles:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}
     env:
       RCLONE_CONFIG_R2_TYPE: s3
       RCLONE_CONFIG_R2_PROVIDER: Cloudflare
@@ -48,5 +56,5 @@ jobs:
       - name: Upload to R2
         run: |
           rclone copyto etl/output/labels-vancouver-island.pmtiles \
-            r2:xsites/tiles/labels-vancouver-island.pmtiles \
+            "r2:${{ vars.R2_PUBLIC_BUCKET }}/tiles/labels-vancouver-island.pmtiles" \
             --s3-no-check-bucket --header-upload "Content-Type: application/octet-stream" -v
