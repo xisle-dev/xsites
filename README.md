@@ -123,7 +123,7 @@ Each launch site is one record covering name, area, description/hazards
 list of reference links (photos, PDFs, GPX tracks).
 
 The sole source of truth is one Cloudflare R2 bucket per environment
-(`server/src/store.ts`; PROD's is `xsites-live-data`), one object per site
+(`server/src/store.ts`; PROD's is `xsites-prod`), one object per site
 at `sites/<id>.yaml` plus media at `sites/<id>/media/<filename>`, using a small hand-rolled flat-scalar YAML
 dialect (see `server/src/siteyaml.ts`'s header comment). All reads and
 writes from the editor go here, via a native R2 binding -- there's no
@@ -135,7 +135,7 @@ local disk, no repo-checked-in copy, and no S3-style credentials involved.
 | --- | --- | --- | --- |
 | Runs | your PC, `go run ./dev` | Cloudflare Worker `xsites-editor-qa` | Cloudflare Worker `xsites-editor` |
 | URL | <http://localhost:8787> | <https://qa.xisle.net> | <https://xisle.net> |
-| Site data | `dev/data/` (local files) | R2 `xsites-live-data-qa` | R2 `xsites-live-data` |
+| Site data | `dev/data/` (local files) | R2 `xsites-qa` | R2 `xsites-prod` |
 | Gets code by | live from the repo | **Deploy**: every merge to `master`, or Run workflow on any other branch | **Deploy**: Run workflow on `master`, after your approval |
 
 ### DEV
@@ -185,7 +185,7 @@ only the code. Everything else is separate:
 | --- | --- | --- |
 | URL | <https://qa.xisle.net> | <https://xisle.net> |
 | Worker | `xsites-editor-qa` (`wrangler deploy --env qa`) | `xsites-editor` |
-| R2 bucket | `xsites-live-data-qa` | `xsites-live-data` |
+| R2 bucket | `xsites-qa` | `xsites-prod` |
 | Admin password | its own | its own |
 | GitHub environment | `qa` | `prod` (deploys need your approval) |
 | Cloudflare tokens | `xsites-deploy-qa`, `xsites-r2-qa` | `xsites-deploy-prod`, `xsites-r2-prod` |

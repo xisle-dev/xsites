@@ -1,4 +1,4 @@
-# Nightly backup of PROD's site data (R2 xsites-live-data: every
+# Nightly backup of PROD's site data (R2 xsites-prod: every
 # sites/<id>.yaml and its media) onto this repo's "backup" branch, committed
 # only when something changed -- so that branch's history is a dated record
 # of every edit. The branch is an orphan: it shares no history with master
@@ -53,14 +53,14 @@ jobs:
       # and keep the last good backup instead.
       - name: Refuse to back up an empty bucket
         run: |
-          n=$(rclone lsf r2:xsites-live-data/sites --include "*.yaml" --max-depth 1 | wc -l)
+          n=$(rclone lsf r2:xsites-prod/sites --include "*.yaml" --max-depth 1 | wc -l)
           echo "sites in PROD: $n"
           if [ "$n" -eq 0 ]; then
             echo "::error::PROD's bucket has no sites; not overwriting the last backup"
             exit 1
           fi
       - name: Copy live data from R2
-        run: rclone sync r2:xsites-live-data backup/data --exclude "tiles/**" --exclude "/sites.json" -v
+        run: rclone sync r2:xsites-prod backup/data --exclude "tiles/**" --exclude "/sites.json" -v
       - name: Commit if changed
         working-directory: backup
         run: |
