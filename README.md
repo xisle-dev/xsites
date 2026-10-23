@@ -12,8 +12,8 @@ Worker today (see **Live editing** below) but written to be portable --
 see **Portability** below for exactly what is and isn't Cloudflare-specific:
 
 - `server/public/` at `/` — a public read-only viewer, reading site data
-  from `GET /sites.json` (a snapshot kept current by the instant-publish
-  mirror, see below -- not a live `/api/sites` call) and labels from the
+  from `GET /sites.json` (a snapshot kept current on every save, see
+  **sites.json** below) and labels from the
   server's own `/tiles/*` route.
 - `server/public/admin/` at `/admin` — the full read/write CRUD editor.
 - `/api/sites` (CRUD JSON), `/media/<id>/<file>` (site photos), and
@@ -122,9 +122,9 @@ Each launch site is one record covering name, area, description/hazards
 (rich text), lat/lon, elevation, a saved camera preset for "Fly here", and a
 list of reference links (photos, PDFs, GPX tracks).
 
-The sole source of truth is a Cloudflare R2 bucket (`server/src/store.ts`),
-one object per site at `sites/<id>.yaml` plus media at
-`sites/<id>/media/<filename>`, using a small hand-rolled flat-scalar YAML
+The sole source of truth is one Cloudflare R2 bucket per environment
+(`server/src/store.ts`; PROD's is `xsites-live-data`), one object per site
+at `sites/<id>.yaml` plus media at `sites/<id>/media/<filename>`, using a small hand-rolled flat-scalar YAML
 dialect (see `server/src/siteyaml.ts`'s header comment). All reads and
 writes from the editor go here, via a native R2 binding -- there's no
 local disk, no repo-checked-in copy, and no S3-style credentials involved.
@@ -137,12 +137,12 @@ local-disk mode):
 ```bash
 cd server
 npm install
-npm run dev   # wrangler dev --remote
+npm run dev   # wrangler dev --remote --env qa (QA's buckets)
 ```
 
 Then open http://127.0.0.1:8787. This needs `wrangler login` once, and
-access to the `xsites-live-data` / `xsites` R2 buckets on the Cloudflare
-account (see below).
+access to QA's `xsites-live-data-qa` R2 bucket on the Cloudflare account
+(see below).
 
 ## Live editing (Cloudflare Workers)
 
@@ -157,15 +157,18 @@ account).
 
 ### Initial setup (one-time)
 
-1. **Two R2 buckets**: `xsites-live-data` (the editor's live source of
-   truth) and `xsites` (the public bucket, used for the instant-publish
-   mirror and the PMTiles archive). Both are declared as native bindings in
+(Normally all done by `go run ./setup` and the workflows -- see **GitHub
+Actions** below. The manual equivalent for PROD:)
+
+1. **One R2 bucket**: `xsites-live-data`, holding the site YAML and media
+   (`sites/`), the derived `sites.json`, and the PMTiles archive
+   (`tiles/`). It's declared as the `DATA` binding in
    `server/wrangler.toml` -- no separate credentials needed for the server
-   to read/write them.
-2. **Upload the `.pmtiles` label archive** to the `xsites` bucket once (it's
-   too large for git and rarely changes):
+   to read/write it.
+2. **Upload the `.pmtiles` label archive** to it once (it's too large for
+   git and rarely changes):
    ```bash
-   npx wrangler r2 object put xsites/tiles/labels-vancouver-island.pmtiles \
+   npx wrangler r2 object put xsites-live-data/tiles/labels-vancouver-island.pmtiles \
      --file=etl/output/labels-vancouver-island.pmtiles \
      --content-type=application/octet-stream --remote
    ```
@@ -201,47 +204,102 @@ npx wrangler deploy
 Wrangler re-uploads changed static assets (`server/public/`) and the server
 script together; no image build, no container registry.
 
+### QA and PROD
+
+Two environments run side by side in the same Cloudflare account and share
+only the code. Everything else is separate:
+
+| | QA | PROD |
+| --- | --- | --- |
+| URL | <https://qa.xisle.net> | <https://xisle.net> |
+| Worker | `xsites-editor-qa` (`wrangler deploy --env qa`) | `xsites-editor` |
+| R2 bucket | `xsites-live-data-qa` | `xsites-live-data` |
+| Admin password | its own | its own |
+| GitHub environment | `qa` | `prod` (deploys need your approval) |
+| Cloudflare tokens | `xsites-deploy-qa`, `xsites-r2-qa` | `xsites-deploy-prod`, `xsites-r2-prod` |
+
+Each environment's R2 token can reach only its own bucket. The deploy
+tokens are account-wide by necessity (Cloudflare can't scope a token to one
+Worker), so the wall between QA and PROD Workers is the `prod` GitHub
+environment: only jobs that target it, after your approval, get its token.
+`npm run dev` runs against QA.
+
+Code moves QA -> PROD like this: push to `master` -> Deploy ships it to QA
+-> you check qa.xisle.net -> approve the waiting `prod` job in the Actions
+run -> the same commit ships to PROD. A newer push replaces an unapproved
+PROD deploy.
+
 ### GitHub Actions
 
-Four workflows in `.github/workflows/` take every routine job off your own
+Workflows in `.github/workflows/` take every routine job off your own
 machine -- no Node, npm or wrangler needed locally:
 
 | Workflow | Runs | Does |
 | --- | --- | --- |
-| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, then `wrangler deploy` |
+| `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, deploy to QA, then to PROD after your approval |
 | `airspace.yml` | 1st of each month, or by hand | `etl airspace`, copies it into `server/public/data/`, opens a PR to review; merging deploys it |
-| `tiles.yml` | by hand (optional build date) | `etl tiles`, uploads the `.pmtiles` to R2 `xsites/tiles/` with rclone |
-| `backup.yml` | nightly, or by hand | `rclone sync` of R2 `xsites-live-data` into a private backup repo, committed only on change |
+| `tiles.yml` | by hand: pick `qa` or `prod` (optional build date) | `etl tiles`, uploads the `.pmtiles` to that environment's bucket |
+| `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media into a private backup repo, committed only on change |
+| `seed-qa.yml` | by hand | replaces QA's data with the latest PROD backup |
 
-One-time setup:
+One-time setup is a single command, `setup/` (Go, stdlib plus
+`golang.org/x/crypto`), which builds both environments through the
+Cloudflare and GitHub APIs:
 
-1. **Cloudflare API token** (My Profile > API Tokens, "Edit Cloudflare
-   Workers" template) -> repo secret `CLOUDFLARE_API_TOKEN`. Your account ID
-   -> repo secret `CLOUDFLARE_ACCOUNT_ID`.
-2. **R2 API token** (R2 > Manage API tokens, Object Read & Write on
-   `xsites` and `xsites-live-data`) -> repo secrets `R2_ACCESS_KEY_ID` and
-   `R2_SECRET_ACCESS_KEY`.
-3. **Backup repo**: create a private repo (e.g. `xisle-dev/xsites-backup`),
-   run `ssh-keygen -t ed25519 -f backup_key -N ""`, add `backup_key.pub` to
-   it as a deploy key with write access, add `backup_key` to this repo as
-   secret `BACKUP_DEPLOY_KEY`, and set repo variable `BACKUP_REPO` to the
-   backup repo's `owner/name`.
-4. **Settings > Actions > General**: enable "Allow GitHub Actions to create
-   and approve pull requests" (needed by `airspace.yml`).
+- Per environment: its R2 bucket (created by a temporary token that is
+  deleted straight after), a deploy token (Workers scripts, routes, DNS --
+  no R2), an R2 token on just its bucket, and a GitHub environment holding
+  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`, `ADMIN_PASSWORD` and variable `R2_BUCKET`
+- Backups: the private backup repo (`xisle-dev/xsites-backup`), a
+  `prod-backup` environment with a read-only token on PROD's bucket
+  and the repo's write deploy key, a read-only key on the backup repo for
+  QA's seeding, and the `BACKUP_REPO` variable
+- "Allow GitHub Actions to create and approve pull requests"
 
-To restore live data from a backup checkout:
-`rclone sync data r2:xsites-live-data`.
+Every step is safe to re-run, and a re-run rotates every token value and
+deploy key and writes the new ones into GitHub -- that's also how you
+rotate credentials.
 
-### Instant publish
+It needs two credentials that no API can create for you:
 
-`server/src/publish.ts` mirrors every save into the `xsites` bucket's
-`sites.json` / `media/<id>/<file>`, which is what the server's own public
-viewer (`GET /sites.json`, `GET /media/...`) actually reads -- kept separate
-from the live-editing bucket (`xsites-live-data`) so an anonymous page view
-never touches the authoritative per-site YAML store or pays for re-parsing
-it. Because `PUBLIC_SITE` is just another R2 binding (not a separate set of
-credentials the way the old Cloud Run setup needed), this always runs --
-there's no "not configured yet" state to worry about.
+1. **Cloudflare bootstrap token**: at
+   <https://dash.cloudflare.com/profile/api-tokens>, select **Create Token**
+   and use the **Create Additional Tokens** template. It can only mint
+   other tokens; give it a short expiry (a day) and delete it afterwards.
+2. **GitHub**: `gh auth login` once (or set `GITHUB_TOKEN` to a token with
+   `repo` scope).
+
+Then, in PowerShell:
+
+```powershell
+cd setup
+$env:CLOUDFLARE_ACCOUNT_ID = "<account id>"
+$env:CLOUDFLARE_BOOTSTRAP_TOKEN = "<bootstrap token>"
+$env:ADMIN_PASSWORD_QA = "<QA admin password>"      # first run, or to change it
+$env:ADMIN_PASSWORD_PROD = "<PROD admin password>"  # first run, or to change it
+go run . -deploy
+```
+
+The account ID is the hex string in your dashboard URL
+(`dash.cloudflare.com/<account id>/...`). `-deploy` runs the Deploy
+workflow at the end. On first setup, also run Tiles for each environment,
+then Seed QA once the first backup exists. Admin passwords live in GitHub
+and every deploy pushes them to their Worker.
+
+To restore PROD's live data from a backup checkout (needs PROD's
+read/write R2 keys, not the backup's read-only ones):
+`rclone sync data r2:xsites-live-data --exclude "tiles/**"`.
+
+### sites.json
+
+`server/src/publish.ts` keeps `sites.json` -- every site in one JSON array,
+at the bucket root beside `sites/` -- current on every save, and both list
+views (`GET /sites.json` for the public viewer, `GET /api/sites` for the
+editor) read that one object instead of parsing every site's YAML (~150ms
+vs ~5s for 63 sites). It's purely derived: if it's missing it's rebuilt from
+the YAML on the next request, so deleting it is always safe. Media is
+served straight from `sites/<id>/media/`.
 
 ## Portability
 

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "scripts": {
-    "dev": "wrangler dev --remote",
+    "dev": "wrangler dev --remote --env qa",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
