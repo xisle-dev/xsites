@@ -48,7 +48,7 @@ One Worker (`server/src/index.ts`) serves everything; `server/public/` is the so
 
 - `/` — public read-only viewer (`public/app.js`), reads `GET /sites.json` (a published snapshot, not `/api/sites`).
 - `/admin` — full editor (`public/admin/app.js`). `/admin` and all writes under `/api` require HTTP Basic auth (any username, password = `ADMIN_PASSWORD` secret) via `requireAuth` in `index.ts`. `run_worker_first` in `wrangler.toml` is what routes those through the Worker before assets.
-- Two environments in `wrangler.toml`: PROD (top level, `xsites-editor`, xisle.net, bucket `xsites-prod`) and `[env.qa]` (`xsites-editor-qa`, qa.xisle.net, bucket `xsites-qa`).
+- Two environments in `wrangler.toml`: PROD (top level, `xsites-prod`, xisle.net, bucket `xsites-prod`) and `[env.qa]` (`xsites-qa`, qa.xisle.net, bucket `xsites-qa`).
 - One R2 bucket per environment, bound as `DATA`: authoritative per-site YAML at `sites/<id>.yaml`, media at `sites/<id>/media/<file>`, the derived `sites.json`, and the `.pmtiles` label archive under `tiles/`.
 - `publish.ts` rewrites `sites.json` on every save so list views read one object instead of parsing every YAML; it's rebuilt from the YAML if missing.
 - `tiles.ts` serves vector label tiles via byte-range reads on `tiles/<archive>.pmtiles` in R2 (`pmtiles` package).

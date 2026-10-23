@@ -1,4 +1,4 @@
-// xsites-editor's request handler. Deployed as a Cloudflare Worker today
+// X/Sites' request handler. Deployed as a Cloudflare Worker today
 // (see wrangler.toml), but written against standard Request/Response/URL
 // so it's portable to Node/Deno/Bun with a thin adapter. The only
 // Cloudflare-specific code in this whole file is CloudflareEnv and the line
