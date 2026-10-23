@@ -21,34 +21,28 @@
 //     secrets CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 //     R2_SECRET_ACCESS_KEY, ADMIN_PASSWORD and variable R2_BUCKET
 //
-// Then, for backups: a private backup repo, GitHub environment
-// "prod-backup" holding a read-only token on PROD's bucket and the
-// repo's write deploy key, and a read-only key on the backup repo for QA so
-// it can be seeded from PROD's backup without any access to PROD itself.
+// Then, for backups: GitHub environment "prod-backup" holding a read-only
+// token on PROD's bucket. Backups are committed to this repo's "backup"
+// branch with the workflow's own GITHUB_TOKEN, so no keys are needed.
 //
 // Every step is safe to re-run. Re-running rotates every token value and
-// deploy key and writes the new ones into GitHub, so nothing goes stale.
+// writes the new ones into GitHub, so nothing goes stale.
 //
 // Usage:
 //
 //	cd setup
-//	go run . [-repo xisle-dev/xsites] [-backup-repo xisle-dev/xsites-backup] [-deploy]
+//	go run . [-repo xisle-dev/xsites] [-deploy]
 package main
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type environment struct {
@@ -67,17 +61,15 @@ const prodBucket = "xsites-live-data"
 
 func main() {
 	repo := flag.String("repo", "xisle-dev/xsites", "GitHub repo that deploys the site")
-	backupRepo := flag.String("backup-repo", "xisle-dev/xsites-backup", "private GitHub repo the nightly PROD backup commits to")
 	deploy := flag.Bool("deploy", false, "run the Deploy workflow when setup finishes (QA, then PROD after approval)")
 	flag.Parse()
 	log.SetFlags(0)
 
 	s := &setup{
-		account:    mustEnv("CLOUDFLARE_ACCOUNT_ID"),
-		cf:         &cloudflare{token: mustEnv("CLOUDFLARE_BOOTSTRAP_TOKEN"), account: os.Getenv("CLOUDFLARE_ACCOUNT_ID")},
-		gh:         &github{token: githubToken()},
-		repo:       *repo,
-		backupRepo: *backupRepo,
+		account: mustEnv("CLOUDFLARE_ACCOUNT_ID"),
+		cf:      &cloudflare{token: mustEnv("CLOUDFLARE_BOOTSTRAP_TOKEN"), account: os.Getenv("CLOUDFLARE_ACCOUNT_ID")},
+		gh:      &github{token: githubToken()},
+		repo:    *repo,
 	}
 
 	step("Checking credentials")
@@ -117,13 +109,12 @@ func main() {
 }
 
 type setup struct {
-	account    string
-	cf         *cloudflare
-	gh         *github
-	catalog    permissionCatalog
-	ownerID    int64
-	repo       string
-	backupRepo string
+	account string
+	cf      *cloudflare
+	gh      *github
+	catalog permissionCatalog
+	ownerID int64
+	repo    string
 }
 
 func (s *setup) environment(env environment) {
@@ -212,36 +203,9 @@ func (s *setup) backups() {
 	check(s.gh.setSecret(scope, "CLOUDFLARE_ACCOUNT_ID", s.account))
 	check(s.gh.setSecret(scope, "R2_ACCESS_KEY_ID", keyID))
 	check(s.gh.setSecret(scope, "R2_SECRET_ACCESS_KEY", secret))
-
-	step("[backup] Backup repo " + s.backupRepo)
-	created, err := s.gh.ensurePrivateRepo(s.backupRepo)
-	check(err)
-	done(created, "created (private)", "already exists")
-	check(s.gh.setVariable(repoScope(s.repo), "BACKUP_REPO", s.backupRepo))
-
-	pub, priv := newDeployKey("xsites-backup")
-	check(s.gh.replaceDeployKey(s.backupRepo, "xsites-backup", pub, false))
-	check(s.gh.setSecret(scope, "BACKUP_DEPLOY_KEY", priv))
-
-	step("[qa] Read-only key on the backup repo, for seeding QA")
-	pub, priv = newDeployKey("xsites-qa-seed")
-	check(s.gh.replaceDeployKey(s.backupRepo, "xsites-qa-seed", pub, true))
-	check(s.gh.setSecret(envScope(s.repo, "qa"), "BACKUP_READ_KEY", priv))
 }
 
 func (s *setup) accountRes() string { return "com.cloudflare.api.account." + s.account }
-
-// newDeployKey returns an ed25519 key pair as an authorized_keys line and an
-// OpenSSH private key, the formats GitHub and actions/checkout expect.
-func newDeployKey(comment string) (pub, priv string) {
-	pk, sk, err := ed25519.GenerateKey(rand.Reader)
-	check(err)
-	sshPub, err := ssh.NewPublicKey(pk)
-	check(err)
-	block, err := ssh.MarshalPrivateKey(sk, comment)
-	check(err)
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub))), string(pem.EncodeToMemory(block))
-}
 
 func githubToken() string {
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {

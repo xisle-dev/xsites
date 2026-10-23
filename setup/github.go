@@ -1,8 +1,7 @@
 package main
 
-// Minimal GitHub REST client for setup: Actions secrets and variables, the
-// private backup repo and its deploy key, the Actions PR-creation setting,
-// and workflow dispatch.
+// Minimal GitHub REST client for setup: environments, Actions secrets and
+// variables, the Actions PR-creation setting, and workflow dispatch.
 
 import (
 	"bytes"
@@ -126,59 +125,6 @@ func (g *github) currentUserID() (int64, error) {
 	}
 	_, err := g.do("GET", "/user", nil, &u)
 	return u.ID, err
-}
-
-// ensurePrivateRepo creates owner/name as a private repo (with an initial
-// commit, so Actions can check it out) unless it already exists.
-func (g *github) ensurePrivateRepo(full string) (created bool, err error) {
-	status, err := g.do("GET", "/repos/"+full, nil, nil)
-	if err == nil {
-		return false, nil
-	}
-	if status != http.StatusNotFound {
-		return false, err
-	}
-	owner, name, _ := strings.Cut(full, "/")
-	var user struct {
-		Type string `json:"type"`
-	}
-	if _, err := g.do("GET", "/users/"+owner, nil, &user); err != nil {
-		return false, err
-	}
-	path := "/user/repos"
-	if user.Type == "Organization" {
-		path = "/orgs/" + owner + "/repos"
-	}
-	_, err = g.do("POST", path, map[string]any{
-		"name":        name,
-		"private":     true,
-		"auto_init":   true,
-		"description": "Nightly backup of the xsites live data (R2 xsites-live-data)",
-	}, nil)
-	return err == nil, err
-}
-
-// replaceDeployKey removes any deploy key with this title and adds pub in
-// its place.
-func (g *github) replaceDeployKey(repo, title, pub string, readOnly bool) error {
-	var keys []struct {
-		ID    int64  `json:"id"`
-		Title string `json:"title"`
-	}
-	if _, err := g.do("GET", "/repos/"+repo+"/keys", nil, &keys); err != nil {
-		return err
-	}
-	for _, k := range keys {
-		if k.Title == title {
-			if _, err := g.do("DELETE", fmt.Sprintf("/repos/%s/keys/%d", repo, k.ID), nil, nil); err != nil {
-				return err
-			}
-		}
-	}
-	_, err := g.do("POST", "/repos/"+repo+"/keys", map[string]any{
-		"title": title, "key": pub, "read_only": readOnly,
-	}, nil)
-	return err
 }
 
 // allowActionsPRs turns on "Allow GitHub Actions to create and approve pull

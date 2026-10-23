@@ -1,14 +1,11 @@
-# Restores PROD's site data (sites/<id>.yaml and media) from a snapshot in
-# the backup repo -- the latest one, or any earlier commit. Tiles are left
-# alone and sites.json is rebuilt. The restore job runs in the "prod"
+# Restores PROD's site data (sites/<id>.yaml and media) from a snapshot on
+# this repo's "backup" branch -- the latest one, or any earlier commit on
+# it. Tiles are left alone and sites.json is rebuilt. Runs in the "prod"
 # environment, so it waits for your approval like a PROD deploy.
 #
 # Before overwriting anything it saves PROD's current data as a workflow
 # artifact ("prod-before-restore", kept 30 days), so a restore can itself be
 # undone by downloading that and syncing it back.
-#
-# Two jobs because each GitHub environment holds only its own secrets:
-# "prod-backup" can read the backup repo, "prod" can write PROD's bucket.
 name: Restore PROD from backup
 
 on:
@@ -22,35 +19,11 @@ on:
         description: 'Type "restore prod" to confirm'
         required: true
 
-jobs:
-  fetch:
-    runs-on: ubuntu-latest
-    environment: prod-backup
-    steps:
-      - name: Check confirmation
-        if: inputs.confirm != 'restore prod'
-        run: |
-          echo "::error::Type exactly: restore prod"
-          exit 1
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.BACKUP_REPO }}
-          ssh-key: ${{ secrets.BACKUP_DEPLOY_KEY }}
-          ref: ${{ inputs.ref }}
-          path: backup
-      - name: Show the snapshot being restored
-        working-directory: backup
-        run: |
-          git log -1 --format='Restoring backup %h from %cd: %s'
-          echo "sites: $(ls data/sites/*.yaml | wc -l)"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: backup-snapshot
-          path: backup/data
-          retention-days: 1
+permissions:
+  contents: read
 
+jobs:
   restore:
-    needs: fetch
     runs-on: ubuntu-latest
     environment:
       name: prod
@@ -63,10 +36,21 @@ jobs:
       RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Check confirmation
+        if: inputs.confirm != 'restore prod'
+        run: |
+          echo "::error::Type exactly: restore prod"
+          exit 1
+      - uses: actions/checkout@v4
         with:
-          name: backup-snapshot
-          path: data
+          ref: ${{ inputs.ref || 'backup' }}
+          path: backup
+      - name: Show the snapshot being restored
+        working-directory: backup
+        run: |
+          git log -1 --format='Restoring backup %h from %cd: %s'
+          test -d data/sites || { echo "::error::$(git rev-parse --short HEAD) is not a backup commit"; exit 1; }
+          echo "sites: $(ls data/sites/*.yaml | wc -l)"
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash
       - name: Save PROD's current data first
@@ -80,7 +64,7 @@ jobs:
       # sync makes PROD match the snapshot (sites added since are removed);
       # excluded paths (tiles, sites.json) are neither copied nor deleted.
       - name: Restore the snapshot into PROD
-        run: rclone sync data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" -v
+        run: rclone sync backup/data "r2:$BUCKET" --exclude "tiles/**" --exclude "/sites.json" -v
       # sites.json is derived; with it gone, the next request rebuilds it from
       # the restored YAML. Request it now so that happens here.
       - name: Rebuild sites.json

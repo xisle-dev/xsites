@@ -1,15 +1,18 @@
 # Replaces QA's site data with a copy of PROD's from the latest nightly
-# backup, so QA can be tested against real sites. QA never touches PROD: it
-# reads the backup repo through a read-only deploy key and writes only to
-# its own bucket. QA's tiles are left alone. Run by hand whenever QA should
+# backup (this repo's "backup" branch), so QA can be tested against real
+# sites. QA never touches PROD: it reads the backup branch and writes only
+# to its own bucket. QA's tiles are left alone. Run by hand whenever QA should
 # be reset.
 #
-# Uses the "qa" environment's secrets and R2_BUCKET variable plus
-# BACKUP_READ_KEY, all written by `go run ./setup`.
+# Uses the "qa" environment's secrets and R2_BUCKET variable, written by
+# `go run ./setup`.
 name: Seed QA from PROD backup
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   seed:
@@ -31,8 +34,7 @@ jobs:
           case "$BUCKET" in *-qa) ;; *) echo "::error::R2_BUCKET=$BUCKET is not a QA bucket"; exit 1;; esac
       - uses: actions/checkout@v4
         with:
-          repository: ${{ vars.BACKUP_REPO }}
-          ssh-key: ${{ secrets.BACKUP_READ_KEY }}
+          ref: backup
           path: backup
       - name: Install rclone
         run: curl -fsSL https://rclone.org/install.sh | sudo bash

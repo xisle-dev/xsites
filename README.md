@@ -239,7 +239,7 @@ machine -- no Node, npm or wrangler needed locally:
 | `deploy.yml` | push to `master` touching `server/`, or by hand | typecheck, deploy to QA, then to PROD after your approval |
 | `airspace.yml` | 1st of each month, or by hand | `etl airspace`, copies it into `server/public/data/`, opens a PR to review; merging deploys it |
 | `tiles.yml` | by hand: pick `qa` or `prod` (optional build date) | `etl tiles`, uploads the `.pmtiles` to that environment's bucket |
-| `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media into a private backup repo, committed only on change |
+| `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media onto this repo's `backup` branch, committed only on change |
 | `seed-qa.yml` | by hand | replaces QA's data with the latest PROD backup |
 | `restore-prod.yml` | by hand (type "restore prod"; needs your approval) | replaces PROD's data with the latest backup, or a chosen backup commit; saves PROD's current data as an artifact first |
 
@@ -252,14 +252,14 @@ Cloudflare and GitHub APIs:
   no R2), an R2 token on just its bucket, and a GitHub environment holding
   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`, `ADMIN_PASSWORD` and variable `R2_BUCKET`
-- Backups: the private backup repo (`xisle-dev/xsites-backup`), a
-  `prod-backup` environment with a read-only token on PROD's bucket
-  and the repo's write deploy key, a read-only key on the backup repo for
-  QA's seeding, and the `BACKUP_REPO` variable
+- Backups: a `prod-backup` environment with a read-only token on PROD's
+  bucket. The backup itself is committed to this repo's `backup` branch
+  (an orphan branch: no shared history with `master`, never deploys) with
+  the workflow's own `GITHUB_TOKEN`, so no extra keys or repos
 - "Allow GitHub Actions to create and approve pull requests"
 
 Every step is safe to re-run, and a re-run rotates every token value and
-deploy key and writes the new ones into GitHub -- that's also how you
+writes the new ones into GitHub -- that's also how you
 rotate credentials.
 
 It needs two credentials that no API can create for you:
@@ -289,8 +289,8 @@ then Seed QA once the first backup exists. Admin passwords live in GitHub
 and every deploy pushes them to their Worker.
 
 To restore PROD's site data, run **Restore PROD from backup**: leave
-`ref` blank for the latest backup, or give a commit SHA from the backup
-repo's history for an older one. It keeps PROD's pre-restore data as the
+`ref` blank for the latest backup, or give a commit SHA from the `backup`
+branch's history for an older one. It keeps PROD's pre-restore data as the
 run's `prod-before-restore` artifact for 30 days.
 
 ### sites.json
