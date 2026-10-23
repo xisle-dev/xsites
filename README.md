@@ -241,6 +241,7 @@ machine -- no Node, npm or wrangler needed locally:
 | `tiles.yml` | by hand: pick `qa` or `prod` (optional build date) | `etl tiles`, uploads the `.pmtiles` to that environment's bucket |
 | `backup.yml` | nightly, or by hand | `rclone sync` of PROD's site YAML and media into a private backup repo, committed only on change |
 | `seed-qa.yml` | by hand | replaces QA's data with the latest PROD backup |
+| `restore-prod.yml` | by hand (type "restore prod"; needs your approval) | replaces PROD's data with the latest backup, or a chosen backup commit; saves PROD's current data as an artifact first |
 
 One-time setup is a single command, `setup/` (Go, stdlib plus
 `golang.org/x/crypto`), which builds both environments through the
@@ -287,9 +288,10 @@ workflow at the end. On first setup, also run Tiles for each environment,
 then Seed QA once the first backup exists. Admin passwords live in GitHub
 and every deploy pushes them to their Worker.
 
-To restore PROD's live data from a backup checkout (needs PROD's
-read/write R2 keys, not the backup's read-only ones):
-`rclone sync data r2:xsites-live-data --exclude "tiles/**"`.
+To restore PROD's site data, run **Restore PROD from backup**: leave
+`ref` blank for the latest backup, or give a commit SHA from the backup
+repo's history for an older one. It keeps PROD's pre-restore data as the
+run's `prod-before-restore` artifact for 30 days.
 
 ### sites.json
 
