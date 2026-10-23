@@ -27,7 +27,7 @@ run_worker_first = ["/admin", "/admin/*", "/api/*"]
 # sites.json the list views read, and the label tiles under tiles/.
 [[r2_buckets]]
 binding = "DATA"
-bucket_name = "xsites-live-data"
+bucket_name = "xsites-prod"
 
 # QA: a fully separate Worker (xsites-editor-qa), domain and bucket
 # in the same Cloudflare account, deployed with `wrangler deploy --env qa`.
@@ -38,4 +38,4 @@ routes = [{ pattern = "qa.xisle.net", custom_domain = true }]
 
 [[env.qa.r2_buckets]]
 binding = "DATA"
-bucket_name = "xsites-live-data-qa"
+bucket_name = "xsites-qa"

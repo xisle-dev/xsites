@@ -53,11 +53,11 @@ type environment struct {
 }
 
 var environments = []environment{
-	{name: "qa", bucket: "xsites-live-data-qa", passwordEnv: "ADMIN_PASSWORD_QA"},
-	{name: "prod", bucket: "xsites-live-data", passwordEnv: "ADMIN_PASSWORD_PROD", approval: true},
+	{name: "qa", bucket: "xsites-qa", passwordEnv: "ADMIN_PASSWORD_QA"},
+	{name: "prod", bucket: "xsites-prod", passwordEnv: "ADMIN_PASSWORD_PROD", approval: true},
 }
 
-const prodBucket = "xsites-live-data"
+const prodBucket = "xsites-prod"
 
 func main() {
 	repo := flag.String("repo", "xisle-dev/xsites", "GitHub repo that deploys the site")
